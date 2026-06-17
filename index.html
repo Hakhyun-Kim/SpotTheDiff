@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>틀린그림찾기 - Premium Spot the Difference</title>
+    <meta name="description" content="고해상도 이미지 속 숨겨진 만화화된 부분을 찾아내는 프리미엄 틀린그림찾기 게임입니다.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+KR:wght@300;400;700&display=swap" rel="stylesheet">
+    <!-- Style Sheet -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Canvas Confetti CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- Coordinate Data -->
+    <script src="Images/diff_coords.js"></script>
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <!-- MAIN CONTAINER -->
+    <main id="game-app" class="glass-panel">
+        
+        <!-- DASHBOARD (Theme Selection) -->
+        <section id="dashboard-screen" class="screen">
+            <header class="app-header">
+                <h1 class="logo-title">SPOT THE DIFFERENCE</h1>
+                <p class="subtitle">원본 이미지 속에서 부분적으로 <span>만화화(Cartoonified)</span>된 틀린 곳을 찾아보세요!</p>
+            </header>
+            
+            <div class="theme-selection-area">
+                <h2>플레이할 테마를 선택하세요</h2>
+                <div id="theme-cards-container" class="theme-grid">
+                    <!-- Javascript가 여기에 카드 렌더링 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- GAME SCREEN -->
+        <section id="game-screen" class="screen hidden">
+            <!-- Game Top Status Bar -->
+            <div class="game-status-bar">
+                <button id="btn-back-to-lobby" class="btn btn-secondary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                    로비로
+                </button>
+                
+                <div class="status-item stage-info">
+                    <span class="label">STAGE</span>
+                    <span id="current-stage-num" class="value">1/3</span>
+                </div>
+
+                <div class="status-item timer-info">
+                    <span class="label">TIME</span>
+                    <span id="game-timer" class="value">00:00</span>
+                </div>
+
+                <div class="status-item life-info">
+                    <span class="label">LIFE</span>
+                    <div id="heart-container" class="hearts">
+                        <!-- Hearts will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Comparison Playfield -->
+            <div id="playfield" class="playfield-grid">
+                <!-- Left Image (Original) -->
+                <div class="image-wrapper" id="wrapper-original">
+                    <div class="image-header">원본 (Original)</div>
+                    <div class="image-container">
+                        <img id="img-original" src="" alt="Original Image">
+                        <!-- Crosshair & Click effects container -->
+                        <div class="overlay-layer" id="overlay-original">
+                            <div class="reticle" id="reticle-original"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Image (Changed) -->
+                <div class="image-wrapper" id="wrapper-changed">
+                    <div class="image-header font-highlight">변경된 이미지 (Cartoonified)</div>
+                    <div class="image-container">
+                        <img id="img-changed" src="" alt="Changed Image">
+                        <!-- Crosshair & Click effects container -->
+                        <div class="overlay-layer" id="overlay-changed">
+                            <div class="reticle" id="reticle-changed"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Game Bottom Panel -->
+            <div class="game-control-bar">
+                <div class="control-left">
+                    <button id="btn-game-hint" class="btn btn-secondary">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1 .3 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><line x1="9" y1="18" x2="15" y2="18"></line><line x1="10" y1="22" x2="14" y2="22"></line></svg>
+                        힌트 사용 (<span id="hint-count">3/3</span>)
+                    </button>
+                    <p id="game-hint" class="hint-message">두 이미지에서 다른 곳 한 군데를 마우스로 클릭해 보세요!</p>
+                </div>
+                <button id="btn-next-stage" class="btn btn-primary hidden">
+                    다음 스테이지
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- MODALS -->
+    <!-- Game Clear Modal -->
+    <div id="modal-clear" class="modal-overlay hidden">
+        <div class="modal-content glass-panel bounce-in">
+            <div class="modal-icon success">🎉</div>
+            <h2 id="modal-clear-title">테마 클리어!</h2>
+            <p id="modal-clear-desc">놀라운 관찰력입니다! 모든 틀린 그림을 찾았습니다.</p>
+            <div class="modal-stats">
+                <div class="stat-card">
+                    <span class="stat-label">총 소요 시간</span>
+                    <span id="stat-total-time" class="stat-value">00:00</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">남은 라이프</span>
+                    <span id="stat-remaining-lives" class="stat-value">❤❤❤</span>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="btn-modal-retry" class="btn btn-secondary">다시 도전</button>
+                <button id="btn-modal-lobby" class="btn btn-primary">로비로 이동</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="modal-gameover" class="modal-overlay hidden">
+        <div class="modal-content glass-panel bounce-in">
+            <div class="modal-icon danger">😢</div>
+            <h2>게임 오버</h2>
+            <p>기회를 모두 잃었습니다. 다시 시도해 보세요!</p>
+            <div class="modal-actions">
+                <button id="btn-modal-retry-failed" class="btn btn-primary">다시 도전</button>
+                <button id="btn-modal-lobby-failed" class="btn btn-secondary">로비로 이동</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script File -->
+    <script src="app.js"></script>
+</body>
+</html>

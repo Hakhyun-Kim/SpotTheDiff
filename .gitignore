@@ -1,0 +1,19 @@
+# Ignore original and changed image directories (excluding coordinate files)
+Images/Original/
+Images/Changed/
+
+# Ignore Python caches and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# System specific files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
