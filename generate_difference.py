@@ -182,51 +182,51 @@ def apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask):
     inpainted = cv2.inpaint(img, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
     return inpainted
 
-def apply_cloning_effect(img, x, y, roi_w, roi_h, obj_mask):
+def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     """
-    사물 마스크 영역을 평행이동시켜 새로운 위치에 복제 복사본을 하나 더 붙입니다.
+    Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 합성합니다.
     """
-    h, w = img.shape[:2]
+    stickers_dir = r"d:\FindDIfference\Images\Stickers"
+    if not os.path.exists(stickers_dir):
+        print(f"Stickers 폴더가 없습니다: {stickers_dir}")
+        return img.copy()
+        
+    sticker_files = [f for f in os.listdir(stickers_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     
-    # 원본 ROI 추출
-    roi = img[y:y+roi_h, x:x+roi_w]
+    if not sticker_files:
+        print("Stickers 폴더에 스티커 이미지가 없습니다. 빈 이미지 반환합니다.")
+        return img.copy()
+        
+    chosen_sticker_name = random.choice(sticker_files)
+    sticker_path = os.path.join(stickers_dir, chosen_sticker_name)
     
-    # 평행 이동 거리 설정 (오프셋 20~40px)
-    offset_x = random.choice([-35, -20, 20, 35])
-    offset_y = random.choice([-35, -20, 20, 35])
+    # 안전하게 유니코드 경로로 로드
+    sticker = imread_unicode(sticker_path)
+    if sticker is None:
+        return img.copy()
+        
+    # 1. 흰색 배경을 투명 마스크로 분리 (흰색이 아닌 곳을 사물로 인식)
+    gray = cv2.cvtColor(sticker, cv2.COLOR_BGR2GRAY)
+    _, binary_mask = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
     
-    # 새 위치 클램핑
-    new_x = max(0, min(w - roi_w, x + offset_x))
-    new_y = max(0, min(h - roi_h, y + offset_y))
+    # 2. 지정된 ROI 크기에 맞춰 리사이즈
+    resized_sticker = cv2.resize(sticker, (roi_w, roi_h), interpolation=cv2.INTER_AREA)
+    resized_mask = cv2.resize(binary_mask, (roi_w, roi_h), interpolation=cv2.INTER_NEAREST)
     
-    # 새 위치의 백그라운드 픽셀 영역
-    target_roi = img[new_y:new_y+roi_h, new_x:new_x+roi_w]
+    # 3. 경계면을 부드럽게 만들기 위해 마스크에 약한 가우시안 블러 적용
+    mask_blur = cv2.GaussianBlur(resized_mask, (3, 3), 0)
+    mask_normalized = mask_blur.astype(np.float32) / 255.0
+    mask_normalized = np.expand_dims(mask_normalized, axis=2) # (H, W, 1)로 변환
     
-    # 마스크 정규화 및 브로드캐스팅 차원 추가
-    mask_normalized = obj_mask.astype(np.float32) / 255.0
-    mask_normalized = np.expand_dims(mask_normalized, axis=2)
-    
-    # 합성: target_roi * (1 - mask) + roi * mask
+    # 4. 합성 영역 추출 및 블렌딩
+    target_roi = img[y:y+roi_h, x:x+roi_w]
     blended = (target_roi.astype(np.float32) * (1.0 - mask_normalized) + 
-               roi.astype(np.float32) * mask_normalized)
+               resized_sticker.astype(np.float32) * mask_normalized)
     
-    cloned_img = img.copy()
-    cloned_img[new_y:new_y+roi_h, new_x:new_x+roi_w] = blended.astype(np.uint8)
+    changed_img = img.copy()
+    changed_img[y:y+roi_h, x:x+roi_w] = blended.astype(np.uint8)
     
-    # 정답 박스 좌표는 두 물체를 모두 포함하도록 확장
-    min_x = min(x, new_x)
-    max_x = max(x + roi_w, new_x + roi_w)
-    min_y = min(y, new_y)
-    max_y = max(y + roi_h, new_y + roi_h)
-    
-    new_coords = {
-        "x": min_x,
-        "y": min_y,
-        "width": max_x - min_x,
-        "height": max_y - min_y
-    }
-    
-    return cloned_img, new_coords
+    return changed_img
 
 def process_single_image(args):
     """
@@ -273,8 +273,8 @@ def process_single_image(args):
     
     # 2가지 기법 중 랜덤 선택
     # inpainting: 사물 지우기 (Inpainting)
-    # cloning: 사물 복제 / 추가 (Cloning)
-    effect_choice = random.choice(["inpainting", "cloning"])
+    # addition: 새로운 만화 이미지 사물 추가 (Sticker Addition)
+    effect_choice = random.choice(["inpainting", "addition"])
     
     coords = {
         "x": x,
@@ -284,14 +284,13 @@ def process_single_image(args):
     }
     
     if effect_choice == "inpainting":
-        # 1. 사물 지우기 기법
+        # 1. 사물 제거 기법
         changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask)
         effect_name = "사물 제거 (Inpainting)"
     else:
-        # 2. 사물 추가/복제 기법 (cloning_coords로 좌표 갱신)
-        changed_img, cloning_coords = apply_cloning_effect(img, x, y, roi_w, roi_h, obj_mask)
-        coords = cloning_coords
-        effect_name = "사물 복제 (Cloning)"
+        # 2. 새로운 만화 이미지 사물 추가 기법 (Sticker Addition)
+        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
+        effect_name = "사물 추가 (Cartoon Sticker)"
         
     # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
     success = imwrite_unicode(changed_path, changed_img)
