@@ -169,6 +169,65 @@ def blend_with_object_mask(original_roi, changed_roi, mask):
 
 from concurrent.futures import ProcessPoolExecutor
 
+def apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask):
+    """
+    원본 이미지의 특정 물체 영역(obj_mask)을 cv2.inpaint를 사용하여 주변 배경으로 채워 제거합니다.
+    """
+    h, w = img.shape[:2]
+    # 전체 이미지 크기의 이진 마스크 생성
+    full_mask = np.zeros((h, w), dtype=np.uint8)
+    full_mask[y:y+roi_h, x:x+roi_w] = obj_mask
+    
+    # cv2.inpaint 수행 (inpaintRadius는 주변부 픽셀 경계선을 자연스럽게 채우도록 설정)
+    inpainted = cv2.inpaint(img, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    return inpainted
+
+def apply_cloning_effect(img, x, y, roi_w, roi_h, obj_mask):
+    """
+    사물 마스크 영역을 평행이동시켜 새로운 위치에 복제 복사본을 하나 더 붙입니다.
+    """
+    h, w = img.shape[:2]
+    
+    # 원본 ROI 추출
+    roi = img[y:y+roi_h, x:x+roi_w]
+    
+    # 평행 이동 거리 설정 (오프셋 20~40px)
+    offset_x = random.choice([-35, -20, 20, 35])
+    offset_y = random.choice([-35, -20, 20, 35])
+    
+    # 새 위치 클램핑
+    new_x = max(0, min(w - roi_w, x + offset_x))
+    new_y = max(0, min(h - roi_h, y + offset_y))
+    
+    # 새 위치의 백그라운드 픽셀 영역
+    target_roi = img[new_y:new_y+roi_h, new_x:new_x+roi_w]
+    
+    # 마스크 정규화 및 브로드캐스팅 차원 추가
+    mask_normalized = obj_mask.astype(np.float32) / 255.0
+    mask_normalized = np.expand_dims(mask_normalized, axis=2)
+    
+    # 합성: target_roi * (1 - mask) + roi * mask
+    blended = (target_roi.astype(np.float32) * (1.0 - mask_normalized) + 
+               roi.astype(np.float32) * mask_normalized)
+    
+    cloned_img = img.copy()
+    cloned_img[new_y:new_y+roi_h, new_x:new_x+roi_w] = blended.astype(np.uint8)
+    
+    # 정답 박스 좌표는 두 물체를 모두 포함하도록 확장
+    min_x = min(x, new_x)
+    max_x = max(x + roi_w, new_x + roi_w)
+    min_y = min(y, new_y)
+    max_y = max(y + roi_h, new_y + roi_h)
+    
+    new_coords = {
+        "x": min_x,
+        "y": min_y,
+        "width": max_x - min_x,
+        "height": max_y - min_y
+    }
+    
+    return cloned_img, new_coords
+
 def process_single_image(args):
     """
     단일 이미지에 대해 틀린그림찾기 변형 처리를 수행합니다.
@@ -212,28 +271,44 @@ def process_single_image(args):
     # 특정 물체/윤곽선의 바이너리 마스크 획득 (네모박스 경계 우회)
     obj_mask = get_object_mask(roi)
     
-    # 랜덤 변형 효과 적용 (사진에 맞는 다이나믹 재미 요소)
-    changed_roi = apply_random_effect(roi)
+    # 4가지 기법 중 랜덤 선택
+    # cartoon: 고품질 카툰화
+    # hue_shift: 선명한 색조 대비 변경
+    # inpainting: 사물 지우기 (Inpainting)
+    # cloning: 사물 복제 / 추가 (Cloning)
+    effect_choice = random.choice(["cartoon", "hue_shift", "inpainting", "cloning"])
     
-    # 물체 마스크에 기초해 원본과 변형 ROI를 블렌딩 (외곽선 스무스 처리)
-    blended_roi = blend_with_object_mask(roi, changed_roi, obj_mask)
-    
-    # 원본 이미지의 해당 위치에 합성된 ROI 적용
-    changed_img = img.copy()
-    changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
-    
-    # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
-    success = imwrite_unicode(changed_path, changed_img)
-    if not success:
-        return None
-        
     coords = {
         "x": x,
         "y": y,
         "width": roi_w,
         "height": roi_h
     }
-    print(f"[{rel_path_norm}] 변형 완료 -> x: {x}, y: {y}, w: {roi_w}, h: {roi_h}")
+    
+    if effect_choice == "inpainting":
+        # 3. 사물 지우기 기법
+        changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask)
+        effect_name = "사물 제거 (Inpainting)"
+    elif effect_choice == "cloning":
+        # 4. 사물 추가/복제 기법 (cloning_coords로 좌표 갱신)
+        changed_img, cloning_coords = apply_cloning_effect(img, x, y, roi_w, roi_h, obj_mask)
+        coords = cloning_coords
+        effect_name = "사물 복제 (Cloning)"
+    else:
+        # 1 & 2. 기존 ROI 수준의 필터 처리 (카툰화 / Hue Shift)
+        changed_roi = apply_random_effect(roi)
+        blended_roi = blend_with_object_mask(roi, changed_roi, obj_mask)
+        
+        changed_img = img.copy()
+        changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
+        effect_name = f"색상/카툰 필터 ({effect_choice})"
+        
+    # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
+    success = imwrite_unicode(changed_path, changed_img)
+    if not success:
+        return None
+        
+    print(f"[{rel_path_norm}] 변형 완료 ({effect_name}) -> x: {coords['x']}, y: {coords['y']}, w: {coords['width']}, h: {coords['height']}")
     return rel_path_norm, coords
 
 def main():
