@@ -271,12 +271,10 @@ def process_single_image(args):
     # 특정 물체/윤곽선의 바이너리 마스크 획득 (네모박스 경계 우회)
     obj_mask = get_object_mask(roi)
     
-    # 4가지 기법 중 랜덤 선택
-    # cartoon: 고품질 카툰화
-    # hue_shift: 선명한 색조 대비 변경
+    # 2가지 기법 중 랜덤 선택
     # inpainting: 사물 지우기 (Inpainting)
     # cloning: 사물 복제 / 추가 (Cloning)
-    effect_choice = random.choice(["cartoon", "hue_shift", "inpainting", "cloning"])
+    effect_choice = random.choice(["inpainting", "cloning"])
     
     coords = {
         "x": x,
@@ -286,22 +284,14 @@ def process_single_image(args):
     }
     
     if effect_choice == "inpainting":
-        # 3. 사물 지우기 기법
+        # 1. 사물 지우기 기법
         changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask)
         effect_name = "사물 제거 (Inpainting)"
-    elif effect_choice == "cloning":
-        # 4. 사물 추가/복제 기법 (cloning_coords로 좌표 갱신)
+    else:
+        # 2. 사물 추가/복제 기법 (cloning_coords로 좌표 갱신)
         changed_img, cloning_coords = apply_cloning_effect(img, x, y, roi_w, roi_h, obj_mask)
         coords = cloning_coords
         effect_name = "사물 복제 (Cloning)"
-    else:
-        # 1 & 2. 기존 ROI 수준의 필터 처리 (카툰화 / Hue Shift)
-        changed_roi = apply_random_effect(roi)
-        blended_roi = blend_with_object_mask(roi, changed_roi, obj_mask)
-        
-        changed_img = img.copy()
-        changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
-        effect_name = f"색상/카툰 필터 ({effect_choice})"
         
     # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
     success = imwrite_unicode(changed_path, changed_img)
