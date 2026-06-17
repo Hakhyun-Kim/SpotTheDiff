@@ -182,9 +182,81 @@ def apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask):
     inpainted = cv2.inpaint(img, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
     return inpainted
 
+def warp_sticker_perspective(sticker, mask):
+    """
+    스티커와 마스크에 무작위 3D 원근 왜곡(Perspective Warp)을 주어 
+    비스듬한 평면에 붙은 듯한 입체감을 시뮬레이션합니다.
+    """
+    h, w = sticker.shape[:2]
+    
+    # 원본 네 귀퉁이 좌표
+    pts1 = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
+    
+    # 무작위 왜곡 오프셋 (너비/높이의 최대 15% 정도 왜곡)
+    max_warp_w = int(w * random.uniform(0.06, 0.15))
+    max_warp_h = int(h * random.uniform(0.06, 0.15))
+    
+    # 대상 왜곡 좌표 (안쪽이나 바깥쪽으로 찌그러뜨림)
+    pts2 = np.float32([
+        [random.randint(0, max_warp_w), random.randint(0, max_warp_h)], # 좌상
+        [w - random.randint(0, max_warp_w), random.randint(0, max_warp_h)], # 우상
+        [random.randint(0, max_warp_w), h - random.randint(0, max_warp_h)], # 좌하
+        [w - random.randint(0, max_warp_w), h - random.randint(0, max_warp_h)]  # 우하
+    ])
+    
+    # 투영 변환 행렬 획득
+    matrix = cv2.getPerspectiveTransform(pts1, pts2)
+    
+    # 변환 적용 (배경은 흰색/검은색 유지)
+    warped_sticker = cv2.warpPerspective(sticker, matrix, (w, h), borderValue=(255, 255, 255))
+    warped_mask = cv2.warpPerspective(mask, matrix, (w, h), borderValue=0)
+    
+    return warped_sticker, warped_mask
+
+def blend_sticker_realistically(target_roi, sticker, mask):
+    """
+    마스크 영역에 그림자(Drop Shadow)를 주입하고, 
+    원본 이미지의 명암/질감을 투과(Multiply)시켜 3D 표면에 자연스럽게 인쇄된 효과를 냅니다.
+    """
+    h, w = target_roi.shape[:2]
+    
+    # 1. 그림자 마스크 생성 (마스크를 오른쪽/아래로 2~3px 밀고 부드럽게 블러)
+    shadow_mask = np.zeros((h, w), dtype=np.uint8)
+    offset_x = max(1, int(w * 0.05))
+    offset_y = max(1, int(h * 0.05))
+    
+    # 마스크 평행이동
+    M = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
+    shifted_mask = cv2.warpAffine(mask, M, (w, h), borderValue=0)
+    shadow_blur = cv2.GaussianBlur(shifted_mask, (5, 5), 0)
+    shadow_normalized = (shadow_blur.astype(np.float32) / 255.0) * 0.35 # 그림자 농도 35%
+    shadow_normalized = np.expand_dims(shadow_normalized, axis=2)
+    
+    # 2. 원본 ROI에 그림자 합성 (원래 배경을 어둡게 만듦)
+    roi_shadowed = (target_roi.astype(np.float32) * (1.0 - shadow_normalized)).astype(np.uint8)
+    
+    # 3. 텍스처 블렌딩 (Multiply 기법 적용)
+    # 배경의 회색조(밝기) 맵 추출
+    gray_bg = cv2.cvtColor(roi_shadowed, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    gray_bg = np.expand_dims(gray_bg, axis=2)
+    
+    # 조명 효과: 0.65 + 0.35 * bg_brightness 형태로 텍스처를 자연스럽게 결합
+    blend_factor = 0.65 + 0.35 * gray_bg
+    textured_sticker = (sticker.astype(np.float32) * blend_factor).astype(np.uint8)
+    
+    # 4. 마스크 기반 최종 합성 (가우시안 블러링으로 경계 스무싱)
+    mask_blur = cv2.GaussianBlur(mask, (3, 3), 0)
+    mask_normalized = mask_blur.astype(np.float32) / 255.0
+    mask_normalized = np.expand_dims(mask_normalized, axis=2)
+    
+    final_roi = (roi_shadowed.astype(np.float32) * (1.0 - mask_normalized) + 
+                 textured_sticker.astype(np.float32) * mask_normalized)
+                 
+    return final_roi.astype(np.uint8)
+
 def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     """
-    Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 합성합니다.
+    Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 3D 원근 왜곡 및 그림자/텍스처 블렌딩으로 합성합니다.
     """
     stickers_dir = r"d:\FindDIfference\Images\Stickers"
     if not os.path.exists(stickers_dir):
@@ -200,7 +272,6 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     chosen_sticker_name = random.choice(sticker_files)
     sticker_path = os.path.join(stickers_dir, chosen_sticker_name)
     
-    # 안전하게 유니코드 경로로 로드
     sticker = imread_unicode(sticker_path)
     if sticker is None:
         return img.copy()
@@ -213,18 +284,15 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     resized_sticker = cv2.resize(sticker, (roi_w, roi_h), interpolation=cv2.INTER_AREA)
     resized_mask = cv2.resize(binary_mask, (roi_w, roi_h), interpolation=cv2.INTER_NEAREST)
     
-    # 3. 경계면을 부드럽게 만들기 위해 마스크에 약한 가우시안 블러 적용
-    mask_blur = cv2.GaussianBlur(resized_mask, (3, 3), 0)
-    mask_normalized = mask_blur.astype(np.float32) / 255.0
-    mask_normalized = np.expand_dims(mask_normalized, axis=2) # (H, W, 1)로 변환
+    # 3. 3D 원근 왜곡(Perspective Warp) 적용하여 경사/각도 변환 시뮬레이션
+    warped_sticker, warped_mask = warp_sticker_perspective(resized_sticker, resized_mask)
     
-    # 4. 합성 영역 추출 및 블렌딩
+    # 4. 합성 영역 추출 및 그림자/명암(Multiply) 블렌딩 적용
     target_roi = img[y:y+roi_h, x:x+roi_w]
-    blended = (target_roi.astype(np.float32) * (1.0 - mask_normalized) + 
-               resized_sticker.astype(np.float32) * mask_normalized)
+    blended = blend_sticker_realistically(target_roi, warped_sticker, warped_mask)
     
     changed_img = img.copy()
-    changed_img[y:y+roi_h, x:x+roi_w] = blended.astype(np.uint8)
+    changed_img[y:y+roi_h, x:x+roi_w] = blended
     
     return changed_img
 
