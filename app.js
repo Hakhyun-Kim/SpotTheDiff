@@ -289,14 +289,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleHit(box) {
         gameActive = false;
         
-        // 타이머는 최종 스테이지 클리어 전까지 멈추지 않고 흘러가거나, 정답 연출 중엔 일시 정지 가능.
-        // 다음 스테이지로 넘어가는 텀 동안은 정답 이펙트를 집중해 봅니다.
-        
-        // 네온 링 이펙트 드로잉 (원본 해상도 대비 백분율 크기로 그림)
+        // 네온 링 이펙트 드로잉 (원본 해상도 대비 백분율 크기)
         const cxPct = ((box.x + box.width / 2) / currentImageSize.naturalWidth) * 100;
         const cyPct = ((box.y + box.height / 2) / currentImageSize.naturalHeight) * 100;
-        
-        // 링의 크기를 박스 너비/높이 최대값에 맞춰 퍼센티지로 환산
         const ringSizePct = ((Math.max(box.width, box.height) + 30) / currentImageSize.naturalWidth) * 100;
 
         createNeonRing(cxPct, cyPct, ringSizePct);
@@ -305,22 +300,18 @@ document.addEventListener('DOMContentLoaded', () => {
         triggerConfetti();
 
         // 힌트 상태 갱신
-        gameHint.textContent = "성공! 다른 곳을 완벽하게 찾아내셨습니다.";
+        gameHint.textContent = "성공! 잠시 후 다음 이미지로 자동 이동합니다.";
         gameHint.className = "hint-message success";
 
-        // 다음 스테이지 버튼 보이기
-        btnNextStage.classList.remove('hidden');
-        if (stageIndex === playlist.length - 1) {
-            btnNextStage.innerHTML = `
-                결과 확인하기
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            `;
-        } else {
-            btnNextStage.innerHTML = `
-                다음 스테이지
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-            `;
-        }
+        // 1.2초 후 자동으로 다음 스테이지로 스위칭
+        setTimeout(() => {
+            if (stageIndex < playlist.length - 1) {
+                stageIndex++;
+                loadStage();
+            } else {
+                handleGameClear();
+            }
+        }, 1200);
     }
 
     // 오답 처리 (Miss)
