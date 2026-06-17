@@ -38,12 +38,16 @@ def imwrite_unicode(file_path, img):
 def apply_random_effect(roi):
     """
     적용 대상 ROI 이미지에 만화화 필터 또는 자연스러운 색상 변경 필터 중 하나를 랜덤 적용합니다.
-    색상 다양성을 높이기 위해 채도를 크게 부스트하고, 원본 대비 선명하게 다른 색으로 변형합니다.
+    피부색(살색)이나 무채색(저채도 영역)도 확실히 변하도록 채도 강제 보정(Saturation Injection)을 가미합니다.
     """
     effect_type = random.choice(["cartoon", "hue_shift"])
     
-    # 50% 확률로 색상을 강하게 회전시켜 색상 대비를 보장 (두 효과 모두에 적용 가능하도록 설정)
-    # 60~120도 구간 회전으로 원본과 뚜렷하게 대비되는 색상을 획득
+    # 원본 ROI의 채도(S) 분석
+    hsv_orig = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv_orig)
+    s_mean = np.mean(s)
+    
+    # 60~140도 구간 회전으로 원본과 뚜렷하게 대비되는 색상을 획득
     hsv_shift = random.choice([random.randint(60, 90), random.randint(110, 140)])
     
     if effect_type == "cartoon":
@@ -52,18 +56,23 @@ def apply_random_effect(roi):
         for _ in range(4):
             color = cv2.bilateralFilter(color, d=7, sigmaColor=20, sigmaSpace=10)
             
-        hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
+        color_hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
+        ch, cs, cv = cv2.split(color_hsv)
+        
+        # 피부색/살색 등 저채도 영역 감지 시 채도 강제 펌핑
+        if s_mean < 50:
+            cs = np.clip(cs.astype(np.float32) * 2.5 + 50, 65, 255).astype(np.uint8)
+            cv = np.clip(cv.astype(np.float32) * 1.1 + 10, 0, 255).astype(np.uint8)
         
         # 카툰화에서도 색상이 쉽게 구분되도록 50% 확률로 색상 회전 추가
         if random.random() < 0.5:
-            h = ((h.astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
+            ch = ((ch.astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
             
-        # 채도를 1.35배 향상시켜 선명함 극대화
-        s = np.clip(s * 1.35, 0, 255).astype(np.uint8)
-        v = np.clip(v * 1.05 + 5, 0, 255).astype(np.uint8)
-        color = cv2.merge([h, s, v])
-        color = cv2.cvtColor(color, cv2.COLOR_HSV2BGR)
+        # 기본 카툰 채도 향상
+        cs = np.clip(cs * 1.35, 0, 255).astype(np.uint8)
+        
+        color_merged = cv2.merge([ch, cs, cv])
+        color = cv2.cvtColor(color_merged, cv2.COLOR_HSV2BGR)
         
         # 얇고 부드러운 스케치 선
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -83,14 +92,15 @@ def apply_random_effect(roi):
         
     else:
         # 2. 사물 색상 변경 (Hue Shift) - 원본 형상 대비 선명한 대조색 부여
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
-        
+        # 피부색/살색 등 저채도 영역 감지 시 채도 강제 펌핑
+        if s_mean < 50:
+            s = np.clip(s.astype(np.float32) * 2.5 + 50, 65, 255).astype(np.uint8)
+            v = np.clip(v.astype(np.float32) * 1.1 + 10, 0, 255).astype(np.uint8)
+            
         # 확실한 보색 및 대조 구분을 위해 강제 색조 회전
         h = ((h.astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
-        # 채도를 1.4배로 크게 부스트하여 돋보이게 함
+        # 기본 채도 추가 부스트
         s = np.clip(s * 1.4, 0, 255).astype(np.uint8)
-        # 명도도 살짝 업
         v = np.clip(v * 1.1 + 10, 0, 255).astype(np.uint8)
         
         merged = cv2.merge([h, s, v])
