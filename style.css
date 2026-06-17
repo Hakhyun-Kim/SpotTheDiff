@@ -603,3 +603,13 @@ body {
         flex-direction: column;
     }
 }
+
+/* Spinner Animation for Regenerating Button */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.btn-spin svg {
+    animation: spin 1s linear infinite;
+}

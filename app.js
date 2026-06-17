@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Bottom Controls
     const gameHint = document.getElementById('game-hint');
     const btnGameHint = document.getElementById('btn-game-hint');
+    const btnRegenerateImage = document.getElementById('btn-regenerate-image');
     const hintCount = document.getElementById('hint-count');
     const btnNextStage = document.getElementById('btn-next-stage');
     
@@ -171,7 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadStage();
     }
 
-    function loadStage() {
+    function loadStage(useCacheBusting = false) {
         gameActive = false;
         btnNextStage.classList.add('hidden');
         gameHint.textContent = "두 이미지에서 다른 곳 한 군데를 마우스로 클릭해 보세요!";
@@ -190,10 +191,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // 하트(라이프) UI 업데이트
         updateHeartsUI();
 
-        // 이미지 소스 매칭
-        // 캐시 방지를 방지할 필요는 없지만 깔끔하게 경로 렌더링
-        imgOriginal.src = `Images/Original/${stage.path}`;
-        imgChanged.src = `Images/Changed/${stage.path}`;
+        // 이미지 소스 매칭 (캐시 방지를 위한 타임스탬프 쿼리 스트링 조건부 추가)
+        const cacheBust = useCacheBusting ? `?t=${Date.now()}` : '';
+        imgOriginal.src = `Images/Original/${stage.path}${cacheBust}`;
+        imgChanged.src = `Images/Changed/${stage.path}${cacheBust}`;
 
         // 이미지 둘 다 로드 완료 시 판정 영역 및 비율 갱신
         let originalLoaded = false;
@@ -205,6 +206,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentImageSize.naturalWidth = imgOriginal.naturalWidth;
                 currentImageSize.naturalHeight = imgOriginal.naturalHeight;
                 gameActive = true;
+                
+                // 다시 만들기 버튼의 로딩 스피너 리셋
+                resetRegenerateButton();
             }
         }
 
@@ -216,6 +220,13 @@ document.addEventListener('DOMContentLoaded', () => {
             changedLoaded = true;
             checkAllLoaded();
         };
+    }
+
+    function resetRegenerateButton() {
+        if (btnRegenerateImage) {
+            btnRegenerateImage.disabled = false;
+            btnRegenerateImage.classList.remove('btn-spin');
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -566,6 +577,55 @@ document.addEventListener('DOMContentLoaded', () => {
     btnModalLobby.addEventListener('click', returnToLobby);
     btnModalLobbyFailed.addEventListener('click', returnToLobby);
     btnGameHint.addEventListener('click', useHint);
+
+    if (btnRegenerateImage) {
+        btnRegenerateImage.addEventListener('click', () => {
+            if (!gameActive) return;
+            
+            const stage = playlist[stageIndex];
+            if (!stage) return;
+            
+            // 로딩 모드 활성화 및 판정 비활성화
+            btnRegenerateImage.disabled = true;
+            btnRegenerateImage.classList.add('btn-spin');
+            gameActive = false;
+            
+            fetch('/api/regenerate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: stage.path })
+            })
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error('서버 응답 오류');
+                }
+                return res.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // 좌표 정보 갱신
+                    stage.coords = data.coords;
+                    if (typeof DIFF_COORDS !== 'undefined') {
+                        DIFF_COORDS[stage.path] = data.coords;
+                    }
+                    // 캐시 버스팅을 켜서 이미지 새로 로딩
+                    loadStage(true);
+                } else {
+                    alert('이미지 재생성에 실패했습니다: ' + (data.error || '알 수 없는 오류'));
+                    resetRegenerateButton();
+                    gameActive = true;
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                alert('이미지 다시 만들기 중 오류가 발생했습니다. Flask 서버 실행 상태를 확인하세요.');
+                resetRegenerateButton();
+                gameActive = true;
+            });
+        });
+    }
 
     // 다시 시도
     function restartCurrentTheme() {

@@ -167,6 +167,75 @@ def blend_with_object_mask(original_roi, changed_roi, mask):
     
     return blended.astype(np.uint8)
 
+from concurrent.futures import ProcessPoolExecutor
+
+def process_single_image(args):
+    """
+    단일 이미지에 대해 틀린그림찾기 변형 처리를 수행합니다.
+    args: (rel_path, rel_path_norm, original_dir, changed_dir, force, existing_coords)
+    반환값: (rel_path_norm, coords) 또는 None (처리를 건너뛰거나 실패했을 때)
+    """
+    rel_path, rel_path_norm, original_dir, changed_dir, force, existing_coords = args
+    img_path = os.path.join(original_dir, rel_path)
+    changed_path = os.path.join(changed_dir, rel_path)
+    
+    # force가 아니고 이미 변형된 이미지와 좌표가 있으면 건너뜁니다.
+    if not force and os.path.exists(changed_path) and existing_coords:
+        return rel_path_norm, existing_coords
+
+    # Changed 폴더 하위에 동일한 서브 디렉터리 구조를 생성합니다.
+    os.makedirs(os.path.dirname(changed_path), exist_ok=True)
+    
+    # 유니코드 지원 함수를 사용해 이미지를 로드합니다.
+    img = imread_unicode(img_path)
+    if img is None:
+        print(f"이미지를 로드할 수 없습니다: {img_path}")
+        return None
+        
+    h, w, c = img.shape
+    
+    # 변형 영역의 임의 크기 설정 (전체 크기의 15% ~ 25% 가량)
+    roi_w = int(w * random.uniform(0.15, 0.25))
+    roi_h = int(h * random.uniform(0.15, 0.25))
+    
+    # 이미지 가장자리를 피하기 위한 가이드라인 설정 (경계에서 10% 뗌)
+    margin_x = int(w * 0.1)
+    margin_y = int(h * 0.1)
+    
+    # 랜덤 x, y 좌표
+    x = random.randint(margin_x, w - roi_w - margin_x)
+    y = random.randint(margin_y, h - roi_h - margin_y)
+    
+    # ROI 영역 추출
+    roi = img[y:y+roi_h, x:x+roi_w]
+    
+    # 특정 물체/윤곽선의 바이너리 마스크 획득 (네모박스 경계 우회)
+    obj_mask = get_object_mask(roi)
+    
+    # 랜덤 변형 효과 적용 (사진에 맞는 다이나믹 재미 요소)
+    changed_roi = apply_random_effect(roi)
+    
+    # 물체 마스크에 기초해 원본과 변형 ROI를 블렌딩 (외곽선 스무스 처리)
+    blended_roi = blend_with_object_mask(roi, changed_roi, obj_mask)
+    
+    # 원본 이미지의 해당 위치에 합성된 ROI 적용
+    changed_img = img.copy()
+    changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
+    
+    # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
+    success = imwrite_unicode(changed_path, changed_img)
+    if not success:
+        return None
+        
+    coords = {
+        "x": x,
+        "y": y,
+        "width": roi_w,
+        "height": roi_h
+    }
+    print(f"[{rel_path_norm}] 변형 완료 -> x: {x}, y: {y}, w: {roi_w}, h: {roi_h}")
+    return rel_path_norm, coords
+
 def main():
     original_dir = r"d:\FindDIfference\Images\Original"
     changed_dir = r"d:\FindDIfference\Images\Changed"
@@ -175,14 +244,12 @@ def main():
     image_extensions = (".png", ".jpg", ".jpeg")
     
     # os.walk를 활용해 하위 디렉터리 내의 모든 이미지를 수집합니다.
-    # 각 이미지의 '상대 경로'를 기준으로 식별합니다.
     all_images_rel = []
     for root, dirs, files in os.walk(original_dir):
         for f in files:
             if f.lower().endswith(image_extensions):
                 full_path = os.path.join(root, f)
                 rel_path = os.path.relpath(full_path, original_dir)
-                # JSON 키값의 일관성을 위해 역슬래시(\)를 슬래시(/)로 변환합니다.
                 rel_path_normalized = rel_path.replace(os.sep, '/')
                 all_images_rel.append((rel_path, rel_path_normalized))
                 
@@ -201,85 +268,45 @@ def main():
             print(f"기존 좌표 파일을 읽는 중 오류 발생: {e}. 새로 시작합니다.")
             diff_coords = {}
             
-    processed_count = 0
-    active_rel_paths = [item[1] for item in all_images_rel]
+    active_rel_paths = {item[1] for item in all_images_rel}
     
+    # 병렬 처리를 위한 작업 리스트 생성
+    tasks = []
     for rel_path, rel_path_norm in all_images_rel:
-        img_path = os.path.join(original_dir, rel_path)
-        changed_path = os.path.join(changed_dir, rel_path)
+        existing = diff_coords.get(rel_path_norm)
+        tasks.append((rel_path, rel_path_norm, original_dir, changed_dir, False, existing))
         
-        # 이미 변형된 이미지가 존재하고 좌표 정보도 있으면 건너뜁니다.
-        if os.path.exists(changed_path) and rel_path_norm in diff_coords:
-            print(f"[{rel_path_norm}] 이미 변형된 이미지와 좌표 정보가 존재하여 건너뜁니다.")
-            continue
-            
-        # Changed 폴더 하위에 동일한 서브 디렉터리 구조를 생성합니다.
-        os.makedirs(os.path.dirname(changed_path), exist_ok=True)
-        
-        # 유니코드 지원 함수를 사용해 이미지를 로드합니다.
-        img = imread_unicode(img_path)
-        if img is None:
-            print(f"이미지를 로드할 수 없습니다: {img_path}")
-            continue
-            
-        h, w, c = img.shape
-        
-        # 변형 영역의 임의 크기 설정 (전체 크기의 15% ~ 25% 가량)
-        roi_w = int(w * random.uniform(0.15, 0.25))
-        roi_h = int(h * random.uniform(0.15, 0.25))
-        
-        # 이미지 가장자리를 피하기 위한 가이드라인 설정 (경계에서 10% 뗌)
-        margin_x = int(w * 0.1)
-        margin_y = int(h * 0.1)
-        
-        # 랜덤 x, y 좌표
-        x = random.randint(margin_x, w - roi_w - margin_x)
-        y = random.randint(margin_y, h - roi_h - margin_y)
-        
-        print(f"[{rel_path_norm}] 새로 틀린그림 변형 영역 설정 -> x: {x}, y: {y}, width: {roi_w}, height: {roi_h}")
-        
-        # ROI 영역 추출
-        roi = img[y:y+roi_h, x:x+roi_w]
-        
-        # 특정 물체/윤곽선의 바이너리 마스크 획득 (네모박스 경계 우회)
-        obj_mask = get_object_mask(roi)
-        
-        # 랜덤 변형 효과 적용 (사진에 맞는 다이나믹 재미 요소)
-        changed_roi = apply_random_effect(roi)
-        
-        # 물체 마스크에 기초해 원본과 변형 ROI를 블렌딩 (외곽선 스무스 처리)
-        blended_roi = blend_with_object_mask(roi, changed_roi, obj_mask)
-        
-        # 원본 이미지의 해당 위치에 합성된 ROI 적용
-        changed_img = img.copy()
-        changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
-        
-        # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
-        imwrite_unicode(changed_path, changed_img)
-        
-        # 좌표 데이터 기록 (상대 경로 키 사용)
-        diff_coords[rel_path_norm] = {
-            "x": x,
-            "y": y,
-            "width": roi_w,
-            "height": roi_h
-        }
-        processed_count += 1
-        
-    # Original 폴더에 더 이상 존재하지 않는 이미지의 좌표 데이터는 삭제 (동기화)
-    diff_coords = {k: v for k, v in diff_coords.items() if k in active_rel_paths}
+    print(f"총 {len(tasks)}개의 이미지 처리 시작 (병렬 처리)...")
     
-    # 좌표 정보를 JSON으로 저장 (새로운 변경 사항이 있거나 동기화가 필요할 때)
+    new_diff_coords = {}
+    processed_count = 0
+    
+    # CPU 코어 수에 맞추어 프로세스 풀 실행
+    with ProcessPoolExecutor() as executor:
+        results = executor.map(process_single_image, tasks)
+        for res in results:
+            if res is not None:
+                rel_path_norm, coords = res
+                new_diff_coords[rel_path_norm] = coords
+                if rel_path_norm not in diff_coords:
+                    processed_count += 1
+                elif diff_coords[rel_path_norm] != coords:
+                    processed_count += 1
+                    
+    # Original 폴더에 더 이상 존재하지 않는 이미지의 좌표 데이터는 삭제 (동기화)
+    new_diff_coords = {k: v for k, v in new_diff_coords.items() if k in active_rel_paths}
+    
+    # 좌표 정보를 JSON으로 저장
     with open(coords_path, "w", encoding="utf-8") as f:
-        json.dump(diff_coords, f, indent=4, ensure_ascii=False)
+        json.dump(new_diff_coords, f, indent=4, ensure_ascii=False)
         
     # 로컬 브라우저 CORS 보안 우회용 JS 파일로 저장
     js_coords_path = os.path.join(r"d:\FindDIfference\Images", "diff_coords.js")
     with open(js_coords_path, "w", encoding="utf-8") as f:
-        f.write(f"const DIFF_COORDS = {json.dumps(diff_coords, indent=4, ensure_ascii=False)};")
+        f.write(f"const DIFF_COORDS = {json.dumps(new_diff_coords, indent=4, ensure_ascii=False)};")
         
     if processed_count > 0:
-        print(f"이미지 변형 작업 완료! 총 {processed_count}개의 이미지가 새로 처리되었습니다.")
+        print(f"이미지 변형 작업 완료! 총 {processed_count}개의 이미지가 새로 처리되었습니다. (전체 {len(new_diff_coords)}개)")
     else:
         print("새로 처리할 이미지가 없습니다. 모든 이미지가 최신 상태입니다. (JS 파일 갱신 완료)")
 
