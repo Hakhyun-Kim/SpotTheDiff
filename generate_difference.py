@@ -228,6 +228,43 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     
     return changed_img
 
+def find_suitable_position(img, roi_w, roi_h):
+    """
+    이미지 내부에서 에지 밀도를 분석하여 만화 스티커가 얹히기에 
+    너무 단조롭지(예: 휑한 하늘, 민무늬 벽)도 않고 너무 조잡하지도 않은 적절한 영역을 골라 반환합니다.
+    """
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+    
+    margin_x = int(w * 0.1)
+    margin_y = int(h * 0.1)
+    
+    # 25개의 무작위 후보 영역을 추출하여 에지 픽셀 밀도(디테일 정도) 분석
+    candidates = []
+    for _ in range(25):
+        x = random.randint(margin_x, w - roi_w - margin_x)
+        y = random.randint(margin_y, h - roi_h - margin_y)
+        
+        roi_edges = edges[y:y+roi_h, x:x+roi_w]
+        edge_count = np.sum(roi_edges > 0)
+        candidates.append((x, y, edge_count))
+        
+    # 너무 민무늬(벽, 하늘)인 곳을 피하기 위해 적당히 에지가 존재하는 후보군 추출
+    roi_area = roi_w * roi_h
+    suitable_candidates = [
+        (cx, cy) for cx, cy, count in candidates 
+        if 0.01 * roi_area <= count <= 0.18 * roi_area
+    ]
+    
+    if suitable_candidates:
+        return random.choice(suitable_candidates)
+        
+    # 적합한 후보가 없다면 에지가 가장 많은 후보 지점을 반환
+    candidates_sorted = sorted(candidates, key=lambda item: item[2], reverse=True)
+    return candidates_sorted[0][0], candidates_sorted[0][1]
+
 def process_single_image(args):
     """
     단일 이미지에 대해 틀린그림찾기 변형 처리를 수행합니다.
@@ -253,29 +290,22 @@ def process_single_image(args):
         
     h, w, c = img.shape
     
-    # 변형 영역의 임의 크기 설정 (전체 크기의 15% ~ 25% 가량)
-    roi_w = int(w * random.uniform(0.15, 0.25))
-    roi_h = int(h * random.uniform(0.15, 0.25))
+    # 변형 영역의 임의 크기 설정 (전체 크기의 5% ~ 12% 가량으로 대폭 축소)
+    roi_w = int(w * random.uniform(0.05, 0.12))
+    roi_h = int(h * random.uniform(0.05, 0.12))
     
-    # 이미지 가장자리를 피하기 위한 가이드라인 설정 (경계에서 10% 뗌)
-    margin_x = int(w * 0.1)
-    margin_y = int(h * 0.1)
+    # 에지 밀도 맵 분석을 통해 최적의 위치(x, y) 탐색
+    x, y = find_suitable_position(img, roi_w, roi_h)
     
-    # 랜덤 x, y 좌표
-    x = random.randint(margin_x, w - roi_w - margin_x)
-    y = random.randint(margin_y, h - roi_h - margin_y)
-    
-    # ROI 영역 추출
-    roi = img[y:y+roi_h, x:x+roi_w]
-    
-    # 특정 물체/윤곽선의 바이너리 마스크 획득 (네모박스 경계 우회)
-    obj_mask = get_object_mask(roi)
-    
-    # 2가지 기법 중 랜덤 선택
-    # inpainting: 사물 지우기 (Inpainting)
-    # addition: 새로운 만화 이미지 사물 추가 (Sticker Addition)
-    effect_choice = random.choice(["inpainting", "addition"])
-    
+    # 오직 사물 추가 기법 (Cartoon Sticker)만 적용합니다.
+    changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
+    effect_name = "사물 추가 (Cartoon Sticker)"
+        
+    # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
+    success = imwrite_unicode(changed_path, changed_img)
+    if not success:
+        return None
+        
     coords = {
         "x": x,
         "y": y,
@@ -283,20 +313,6 @@ def process_single_image(args):
         "height": roi_h
     }
     
-    if effect_choice == "inpainting":
-        # 1. 사물 제거 기법
-        changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, obj_mask)
-        effect_name = "사물 제거 (Inpainting)"
-    else:
-        # 2. 새로운 만화 이미지 사물 추가 기법 (Sticker Addition)
-        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
-        effect_name = "사물 추가 (Cartoon Sticker)"
-        
-    # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
-    success = imwrite_unicode(changed_path, changed_img)
-    if not success:
-        return None
-        
     print(f"[{rel_path_norm}] 변형 완료 ({effect_name}) -> x: {coords['x']}, y: {coords['y']}, w: {coords['width']}, h: {coords['height']}")
     return rel_path_norm, coords
 
