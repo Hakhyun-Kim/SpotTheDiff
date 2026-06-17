@@ -293,6 +293,15 @@ document.addEventListener('DOMContentLoaded', () => {
             clickY <= box.y + box.height + buffer
         );
 
+        console.log(`[DEBUG] Clicked Overlay: ${activeOverlay.id}`);
+        console.log(`- Overlay Rect: width=${rect.width.toFixed(1)}, height=${rect.height.toFixed(1)}, left=${rect.left.toFixed(1)}, top=${rect.top.toFixed(1)}`);
+        console.log(`- Mouse Client: X=${event.clientX}, Y=${event.clientY}`);
+        console.log(`- Click Ratio: xPct=${xPct.toFixed(4)}, yPct=${yPct.toFixed(4)}`);
+        console.log(`- Image Natural Size: ${currentImageSize.naturalWidth}x${currentImageSize.naturalHeight}`);
+        console.log(`- Calculated Pixel Pos: clickX=${clickX.toFixed(1)}, clickY=${clickY.toFixed(1)}`);
+        console.log(`- Target Box Boundary: x_min=${(box.x-buffer).toFixed(0)}, x_max=${(box.x+box.width+buffer).toFixed(0)}, y_min=${(box.y-buffer).toFixed(0)}, y_max=${(box.y+box.height+buffer).toFixed(0)} (Actual: x=${box.x}, y=${box.y}, w=${box.width}, h=${box.height})`);
+        console.log(`- Hit Test Result: isHit=${isHit}`);
+
         if (isHit) {
             handleHit(box);
         } else {
