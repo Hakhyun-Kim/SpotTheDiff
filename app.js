@@ -67,31 +67,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. DATA PARSING & INITIALIZATION
     // ----------------------------------------------------------------------
     function initData() {
-        if (typeof DIFF_COORDS === 'undefined') {
-            console.error("좌표 데이터(DIFF_COORDS)를 찾을 수 없습니다. diff_coords.js 파일이 올바르게 로드되었는지 확인하세요.");
-            themeCardsContainer.innerHTML = `<p class="error-msg">좌표 데이터를 로드할 수 없습니다. 스크립트를 먼저 실행해 주세요.</p>`;
-            return;
-        }
-
-        // 테마명 자동 추출 및 분류 (예: 'stage1/dessert.png' -> 테마 'stage1', 파일 'dessert.png')
-        themes = {};
-        for (const path in DIFF_COORDS) {
-            const parts = path.split('/');
-            let themeName = 'General';
-            if (parts.length > 1) {
-                themeName = parts[0];
+        themeCardsContainer.innerHTML = '<p class="loading-msg" style="grid-column: 1/-1; text-align: center; font-style: italic; color: var(--text-muted);">좌표 데이터를 불러오는 중입니다...</p>';
+        
+        // API로부터 실시간 최신 좌표 데이터 로드 (CORS 및 브라우저 캐싱 방지)
+        fetch(`/api/coords?t=${Date.now()}`)
+        .then(res => {
+            if (!res.ok) throw new Error('좌표 데이터 로드 실패');
+            return res.json();
+        })
+        .then(coords => {
+            // 테마명 자동 추출 및 분류 (예: 'stage1/dessert.png' -> 테마 'stage1', 파일 'dessert.png')
+            themes = {};
+            for (const path in coords) {
+                const parts = path.split('/');
+                let themeName = 'General';
+                if (parts.length > 1) {
+                    themeName = parts[0];
+                }
+                
+                if (!themes[themeName]) {
+                    themes[themeName] = [];
+                }
+                themes[themeName].push({
+                    path: path,
+                    coords: coords[path]
+                });
             }
-            
-            if (!themes[themeName]) {
-                themes[themeName] = [];
-            }
-            themes[themeName].push({
-                path: path,
-                coords: DIFF_COORDS[path]
-            });
-        }
-
-        renderThemeCards();
+            renderThemeCards();
+        })
+        .catch(err => {
+            console.error(err);
+            themeCardsContainer.innerHTML = `<p class="error-msg" style="grid-column: 1/-1; text-align: center; color: var(--danger);">최신 좌표 데이터를 가져오지 못했습니다. Flask 서버 구동 상태를 확인하세요.</p>`;
+        });
     }
 
     // 테마별 어울리는 아이콘 매핑
@@ -191,11 +198,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // 하트(라이프) UI 업데이트
         updateHeartsUI();
 
-        // 이미지 소스 매칭 (캐시 방지를 위한 타임스탬프 쿼리 스트링 조건부 추가)
-        const cacheBust = useCacheBusting ? `?t=${Date.now()}` : '';
-        imgOriginal.src = `Images/Original/${stage.path}${cacheBust}`;
-        imgChanged.src = `Images/Changed/${stage.path}${cacheBust}`;
-
         // 이미지 둘 다 로드 완료 시 판정 영역 및 비율 갱신
         let originalLoaded = false;
         let changedLoaded = false;
@@ -220,6 +222,11 @@ document.addEventListener('DOMContentLoaded', () => {
             changedLoaded = true;
             checkAllLoaded();
         };
+
+        // 이미지 소스 매칭 (캐시 방지를 위한 타임스탬프 쿼리 스트링 조건부 추가)
+        const cacheBust = useCacheBusting ? `?t=${Date.now()}` : '';
+        imgOriginal.src = `Images/Original/${stage.path}${cacheBust}`;
+        imgChanged.src = `Images/Changed/${stage.path}${cacheBust}`;
     }
 
     function resetRegenerateButton() {

@@ -18,6 +18,17 @@ def index():
 def serve_static(path):
     return send_from_directory('.', path)
 
+@app.route('/api/coords')
+def get_coords():
+    if os.path.exists(COORDS_PATH):
+        try:
+            with open(COORDS_PATH, "r", encoding="utf-8") as f:
+                coords = json.load(f)
+            return jsonify(coords)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({})
+
 @app.route('/api/regenerate', methods=['POST'])
 def regenerate_image():
     data = request.get_json()
