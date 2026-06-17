@@ -69,5 +69,5 @@ def regenerate_image():
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
-    # 로컬 네트워크에서도 접속 가능하도록 0.0.0.0 포트 5000으로 실행
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # 로컬 네트워크에서도 접속 가능하도록 0.0.0.0 포트 6001로 실행
+    app.run(host='0.0.0.0', port=6001, debug=True)
