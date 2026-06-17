@@ -1,6 +1,8 @@
-# Ignore original and changed image directories (excluding coordinate files)
+# Ignore original and changed image directories and coordinate files
 Images/Original/
 Images/Changed/
+Images/diff_coords.json
+Images/diff_coords.js
 
 # Ignore Python caches and build artifacts
 __pycache__/
