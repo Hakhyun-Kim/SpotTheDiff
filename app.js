@@ -26,6 +26,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const gameScreen = document.getElementById('game-screen');
     const themeCardsContainer = document.getElementById('theme-cards-container');
     
+    // Uploader Screen Elements
+    const uploadScreen = document.getElementById('upload-screen');
+    const btnGoUpload = document.getElementById('btn-go-upload');
+    const btnUploadBack = document.getElementById('btn-upload-back');
+    const dropZone = document.getElementById('drop-zone');
+    const folderUploadInput = document.getElementById('folder-upload-input');
+    const fileUploadInput = document.getElementById('file-upload-input');
+    const selectedFilesSummary = document.getElementById('selected-files-summary');
+    const selectedFilesCount = document.getElementById('selected-files-count');
+    const btnStartUpload = document.getElementById('btn-start-upload');
+    const uploadProgressOverlay = document.getElementById('upload-progress-overlay');
+    let selectedFiles = [];
+    
     // Status Bar Elements
     const btnBackToLobby = document.getElementById('btn-back-to-lobby');
     const currentStageNum = document.getElementById('current-stage-num');
@@ -93,7 +106,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     coords: coords[path]
                 });
             }
-            renderThemeCards();
+            
+            const hasThemes = Object.keys(themes).length > 0;
+            if (!hasThemes) {
+                // 이미지가 전혀 없을 때: 이미지 업로드 화면만 표시 (로비 뒤로가기 버튼은 숨김)
+                dashboardScreen.classList.add('hidden');
+                uploadScreen.classList.remove('hidden');
+                btnUploadBack.classList.add('hidden');
+            } else {
+                // 이미지가 있을 때: 로비 화면을 보이고 업로드 뒤로가기 버튼도 보이게 세팅
+                uploadScreen.classList.add('hidden');
+                dashboardScreen.classList.remove('hidden');
+                btnUploadBack.classList.remove('hidden');
+                renderThemeCards();
+            }
         })
         .catch(err => {
             console.error(err);
@@ -664,6 +690,126 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnModalRetry.addEventListener('click', restartCurrentTheme);
     btnModalRetryFailed.addEventListener('click', restartCurrentTheme);
+
+    // ----------------------------------------------------------------------
+    // 10. UPLOADER VIEW AND LOGIC
+    // ----------------------------------------------------------------------
+    btnGoUpload.addEventListener('click', () => {
+        dashboardScreen.classList.add('hidden');
+        uploadScreen.classList.remove('hidden');
+        // Reset file selections
+        selectedFiles = [];
+        selectedFilesSummary.classList.add('hidden');
+        folderUploadInput.value = '';
+        fileUploadInput.value = '';
+    });
+
+    btnUploadBack.addEventListener('click', () => {
+        uploadScreen.classList.add('hidden');
+        dashboardScreen.classList.remove('hidden');
+    });
+
+    // Drag and Drop Visual States
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        }, false);
+    });
+
+    // Drop Files Handler
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files && files.length > 0) {
+            handleFilesSelected(files);
+        }
+    });
+
+    // File Selector Input Handlers
+    folderUploadInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            handleFilesSelected(e.target.files);
+        }
+    });
+
+    fileUploadInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            handleFilesSelected(e.target.files);
+        }
+    });
+
+    function handleFilesSelected(filesList) {
+        selectedFiles = [];
+        const imageExtensions = ['.png', '.jpg', '.jpeg'];
+        for (let i = 0; i < filesList.length; i++) {
+            const file = filesList[i];
+            const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+            if (imageExtensions.includes(ext)) {
+                selectedFiles.push(file);
+            }
+        }
+        
+        if (selectedFiles.length > 0) {
+            selectedFilesCount.textContent = selectedFiles.length;
+            selectedFilesSummary.classList.remove('hidden');
+        } else {
+            selectedFilesSummary.classList.add('hidden');
+            alert('선택한 파일 중 이미지 파일(.png, .jpg, .jpeg)이 없습니다.');
+        }
+    }
+
+    // Submit Upload Handler
+    btnStartUpload.addEventListener('click', () => {
+        if (selectedFiles.length === 0) return;
+
+        uploadProgressOverlay.classList.remove('hidden');
+
+        const formData = new FormData();
+        for (const file of selectedFiles) {
+            formData.append('files', file);
+            // webkitRelativePath contains the folder hierarchy, otherwise use the filename
+            const path = file.webkitRelativePath || file.name;
+            formData.append('paths', path);
+        }
+
+        fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('업로드 서버 오류');
+            return res.json();
+        })
+        .then(data => {
+            uploadProgressOverlay.classList.add('hidden');
+            if (data.success) {
+                alert(`성공적으로 ${data.count}개의 이미지를 업로드하고 틀린그림찾기 스테이지를 생성했습니다!`);
+                // Reset states
+                selectedFiles = [];
+                selectedFilesSummary.classList.add('hidden');
+                folderUploadInput.value = '';
+                fileUploadInput.value = '';
+                
+                // Refresh data and return to lobby
+                initData();
+            } else {
+                alert('업로드 및 이미지 생성 실패: ' + (data.error || '알 수 없는 오류'));
+            }
+        })
+        .catch(err => {
+            uploadProgressOverlay.classList.add('hidden');
+            console.error(err);
+            alert('업로드 중 서버와의 통신 에러가 발생했습니다.');
+        });
+    });
 
     // ----------------------------------------------------------------------
     // APP START

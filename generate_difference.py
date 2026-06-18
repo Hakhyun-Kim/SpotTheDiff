@@ -4,6 +4,9 @@ import numpy as np
 import json
 import random
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def imread_unicode(file_path):
     """
     한글 경로가 포함된 파일에서도 OpenCV가 한글을 인식하지 못하는 버그를 
@@ -258,7 +261,7 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     """
     Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 3D 원근 왜곡 및 그림자/텍스처 블렌딩으로 합성합니다.
     """
-    stickers_dir = r"d:\FindDIfference\Images\Stickers"
+    stickers_dir = os.path.join(BASE_DIR, "Images", "Stickers")
     if not os.path.exists(stickers_dir):
         print(f"Stickers 폴더가 없습니다: {stickers_dir}")
         return img.copy()
@@ -358,16 +361,44 @@ def process_single_image(args):
         
     h, w, c = img.shape
     
-    # 변형 영역의 임의 크기 설정 (전체 크기의 5% ~ 12% 가량으로 대폭 축소)
-    roi_w = int(w * random.uniform(0.05, 0.12))
-    roi_h = int(h * random.uniform(0.05, 0.12))
+    # 변형 영역의 임의 크기 설정 (전체 크기의 2.5% ~ 5.5% 가량으로 세밀하게 축소)
+    roi_w = max(25, int(w * random.uniform(0.025, 0.055)))
+    roi_h = max(25, int(h * random.uniform(0.025, 0.055)))
     
     # 에지 밀도 맵 분석을 통해 최적의 위치(x, y) 탐색
     x, y = find_suitable_position(img, roi_w, roi_h)
     
-    # 오직 사물 추가 기법 (Cartoon Sticker)만 적용합니다.
-    changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
-    effect_name = "사물 추가 (Cartoon Sticker)"
+    # 다양한 변형 효과를 랜덤 적용하여 위장 능력 및 난이도 향상
+    # 0: 사물 변형 (Hue Shift / Cartoon) - 60% 확률
+    # 1: 사물 제거 (Inpainting) - 20% 확률
+    # 2: 사물 추가 (Cartoon Sticker) - 20% 확률
+    effect_choice = random.choice([0, 0, 0, 1, 2])
+    
+    if effect_choice == 0:
+        # 원본 ROI 추출 및 마스크 획득
+        roi = img[y:y+roi_h, x:x+roi_w]
+        mask = get_object_mask(roi)
+        # 만화화 또는 색상 변형 효과 적용
+        effect_roi = apply_random_effect(roi)
+        # 자연스럽게 합성
+        blended_roi = blend_with_object_mask(roi, effect_roi, mask)
+        
+        changed_img = img.copy()
+        changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
+        effect_name = "사물 변형 (In-place Modify)"
+        
+    elif effect_choice == 1:
+        # 원본 ROI 추출 및 마스크 획득
+        roi = img[y:y+roi_h, x:x+roi_w]
+        mask = get_object_mask(roi)
+        # 사물 제거 (Inpainting) 효과 적용
+        changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, mask)
+        effect_name = "사물 제거 (Inpaint)"
+        
+    else:
+        # 사물 추가 (Cartoon Sticker) 효과 적용
+        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
+        effect_name = "사물 추가 (Cartoon Sticker)"
         
     # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
     success = imwrite_unicode(changed_path, changed_img)
@@ -385,8 +416,8 @@ def process_single_image(args):
     return rel_path_norm, coords
 
 def main():
-    original_dir = r"d:\FindDIfference\Images\Original"
-    changed_dir = r"d:\FindDIfference\Images\Changed"
+    original_dir = os.path.join(BASE_DIR, "Images", "Original")
+    changed_dir = os.path.join(BASE_DIR, "Images", "Changed")
     os.makedirs(changed_dir, exist_ok=True)
     
     image_extensions = (".png", ".jpg", ".jpeg")
@@ -406,7 +437,7 @@ def main():
         return
         
     # 기존 좌표 정보 로드
-    coords_path = os.path.join(r"d:\FindDIfference\Images", "diff_coords.json")
+    coords_path = os.path.join(BASE_DIR, "Images", "diff_coords.json")
     diff_coords = {}
     if os.path.exists(coords_path):
         try:
@@ -449,7 +480,7 @@ def main():
         json.dump(new_diff_coords, f, indent=4, ensure_ascii=False)
         
     # 로컬 브라우저 CORS 보안 우회용 JS 파일로 저장
-    js_coords_path = os.path.join(r"d:\FindDIfference\Images", "diff_coords.js")
+    js_coords_path = os.path.join(BASE_DIR, "Images", "diff_coords.js")
     with open(js_coords_path, "w", encoding="utf-8") as f:
         f.write(f"const DIFF_COORDS = {json.dumps(new_diff_coords, indent=4, ensure_ascii=False)};")
         

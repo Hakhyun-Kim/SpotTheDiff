@@ -28,7 +28,13 @@
             </header>
             
             <div class="theme-selection-area">
-                <h2>플레이할 테마를 선택하세요</h2>
+                <div class="theme-header-row">
+                    <h2>플레이할 테마를 선택하세요</h2>
+                    <button id="btn-go-upload" class="btn btn-secondary btn-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        이미지 추가
+                    </button>
+                </div>
                 <div id="theme-cards-container" class="theme-grid">
                     <!-- Javascript가 여기에 카드 렌더링 -->
                 </div>
@@ -106,6 +112,51 @@
                     다음 스테이지
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                 </button>
+            </div>
+        </section>
+
+        <!-- UPLOAD SCREEN -->
+        <section id="upload-screen" class="screen hidden">
+            <header class="app-header">
+                <button id="btn-upload-back" class="btn btn-secondary btn-back">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                    로비로
+                </button>
+                <h1 class="logo-title">UPLOAD IMAGES</h1>
+                <p class="subtitle">나만의 사진 폴더를 업로드하여 틀린그림찾기 스테이지를 추가하세요!</p>
+            </header>
+            
+            <div class="upload-area-container">
+                <div id="drop-zone" class="upload-drop-zone">
+                    <div class="upload-icon">📁</div>
+                    <h3>폴더 또는 여러 이미지 드래그 앤 드롭</h3>
+                    <p>또는 아래 버튼을 눌러 폴더/파일을 선택하세요.</p>
+                    <div class="upload-buttons">
+                        <label for="folder-upload-input" class="btn btn-primary">
+                            폴더 선택
+                        </label>
+                        <input type="file" id="folder-upload-input" webkitdirectory directory multiple style="display: none;">
+                        
+                        <label for="file-upload-input" class="btn btn-secondary">
+                            파일 선택
+                        </label>
+                        <input type="file" id="file-upload-input" multiple accept="image/*" style="display: none;">
+                    </div>
+                    <div id="selected-files-summary" class="selected-files-summary hidden">
+                        <p><span id="selected-files-count">0</span>개의 파일이 선택됨</p>
+                        <button id="btn-start-upload" class="btn btn-success">업로드 및 생성 시작</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Upload Progress Overlay -->
+            <div id="upload-progress-overlay" class="progress-overlay hidden">
+                <div class="progress-card glass-panel">
+                    <div class="spinner"></div>
+                    <h3>이미지 처리 중...</h3>
+                    <p>이미지를 업로드하고 만화화(Cartoonified) 틀린 영역을 자동 생성하고 있습니다.</p>
+                    <p class="sub-alert">이 작업은 이미지 수와 크기에 따라 최대 수십 초가 걸릴 수 있습니다.</p>
+                </div>
             </div>
         </section>
 

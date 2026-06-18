@@ -5,10 +5,11 @@ from generate_difference import process_single_image
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-ORIGINAL_DIR = r"d:\FindDIfference\Images\Original"
-CHANGED_DIR = r"d:\FindDIfference\Images\Changed"
-COORDS_PATH = os.path.join(r"d:\FindDIfference\Images", "diff_coords.json")
-JS_COORDS_PATH = os.path.join(r"d:\FindDIfference\Images", "diff_coords.js")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ORIGINAL_DIR = os.path.join(BASE_DIR, "Images", "Original")
+CHANGED_DIR = os.path.join(BASE_DIR, "Images", "Changed")
+COORDS_PATH = os.path.join(BASE_DIR, "Images", "diff_coords.json")
+JS_COORDS_PATH = os.path.join(BASE_DIR, "Images", "diff_coords.js")
 
 @app.route('/')
 def index():
@@ -77,6 +78,37 @@ def regenerate_image():
         
     except Exception as e:
         print(f"Error regenerating image: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/upload', methods=['POST'])
+def upload_files():
+    uploaded_files = request.files.getlist('files')
+    paths = request.form.getlist('paths')
+    
+    if not uploaded_files or not paths:
+        return jsonify({"success": False, "error": "No files uploaded"}), 400
+        
+    try:
+        for file, path in zip(uploaded_files, paths):
+            # Sanitize path to prevent path traversal
+            parts = path.strip('/').replace('\\', '/').split('/')
+            safe_parts = [p for p in parts if p and p != '..' and p != '.']
+            if not safe_parts:
+                continue
+            safe_path = os.path.join(*safe_parts)
+            target_path = os.path.join(ORIGINAL_DIR, safe_path)
+            
+            # Create subdirectories if they exist
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            file.save(target_path)
+            
+        # After saving, run the image difference generator
+        import generate_difference
+        generate_difference.main()
+        
+        return jsonify({"success": True, "count": len(uploaded_files)})
+    except Exception as e:
+        print(f"Error handling upload: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
