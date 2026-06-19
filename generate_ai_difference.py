@@ -31,9 +31,44 @@ def imwrite_unicode(file_path, img):
         print(f"이미지 저장 중 오류 발생 ({file_path}): {e}")
         return False
 
+def guided_filter(I, p, r, eps):
+    """
+    고속 Guided Filter 구현 (OpenCV boxFilter 사용)
+    I: guidance image (BGR 이미지)
+    p: filtering input (0~1 범위의 float32 마스크)
+    r: local window radius
+    eps: regularization parameter
+    """
+    if len(I.shape) == 3:
+        I_gray = cv2.cvtColor(I, cv2.COLOR_BGR2GRAY)
+    else:
+        I_gray = I
+        
+    I_f = I_gray.astype(np.float32) / 255.0
+    p_f = p.astype(np.float32)
+    
+    mean_I = cv2.boxFilter(I_f, -1, (r, r))
+    mean_p = cv2.boxFilter(p_f, -1, (r, r))
+    mean_Ip = cv2.boxFilter(I_f * p_f, -1, (r, r))
+    
+    cov_Ip = mean_Ip - mean_I * mean_p
+    
+    mean_II = cv2.boxFilter(I_f * I_f, -1, (r, r))
+    var_I = mean_II - mean_I * mean_I
+    
+    a = cov_Ip / (var_I + eps)
+    b = mean_p - a * mean_I
+    
+    mean_a = cv2.boxFilter(a, -1, (r, r))
+    mean_b = cv2.boxFilter(b, -1, (r, r))
+    
+    q = mean_a * I_f + mean_b
+    return q
+
 def change_object_color(img, mask):
     """
     마스크 영역에 해당하는 사물의 색상을 선명한 대조색으로 변경합니다.
+    mask는 0.0~1.0 사이의 값을 가지는 float32 정밀 마스크입니다 (Guided Filter 결과물).
     """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
@@ -46,38 +81,40 @@ def change_object_color(img, mask):
     s_new = s.copy()
     v_new = v.copy()
     
-    h_new[mask > 0] = ((h[mask > 0].astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
+    # 마스크가 활성화된 영역 (임계값 0.1 이상)
+    mask_indices = mask > 0.1
+    h_new[mask_indices] = ((h[mask_indices].astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
     
     # 채도 및 명암 강제 보정 (선명하게 보이도록 세팅)
-    s_new[mask > 0] = np.clip(s[mask > 0].astype(np.float32) + 120, 150, 255).astype(np.uint8)
+    s_new[mask_indices] = np.clip(s[mask_indices].astype(np.float32) + 120, 150, 255).astype(np.uint8)
     
     # 너무 어둡거나 밝은 색 보정
-    v_area = v[mask > 0]
-    if np.mean(v_area) < 70:
-        v_new[mask > 0] = np.clip(v_area.astype(np.float32) + 100, 130, 255).astype(np.uint8)
-    elif np.mean(v_area) > 180:
-        v_new[mask > 0] = np.clip(v_area.astype(np.float32) - 100, 0, 120).astype(np.uint8)
+    v_area = v[mask_indices]
+    if len(v_area) > 0:
+        if np.mean(v_area) < 70:
+            v_new[mask_indices] = np.clip(v_area.astype(np.float32) + 100, 130, 255).astype(np.uint8)
+        elif np.mean(v_area) > 180:
+            v_new[mask_indices] = np.clip(v_area.astype(np.float32) - 100, 0, 120).astype(np.uint8)
     
     hsv_new = cv2.merge([h_new, s_new, v_new])
     changed_img = cv2.cvtColor(hsv_new, cv2.COLOR_HSV2BGR)
     
-    # 마스크 경계를 아주 미세한 가우시안 블러(3x3)로 자연스럽고 또렷하게 합성
-    mask_blur = cv2.GaussianBlur((mask * 255).astype(np.uint8), (3, 3), 0)
-    mask_norm = mask_blur.astype(np.float32) / 255.0
-    mask_norm = np.expand_dims(mask_norm, axis=2)
-    
+    # Guided Filter 마스크 가중치(0.0~1.0)를 사용한 정밀한 알파 블렌딩
+    mask_norm = np.expand_dims(mask, axis=2)
     blended = img.astype(np.float32) * (1.0 - mask_norm) + changed_img.astype(np.float32) * mask_norm
     return blended.astype(np.uint8)
 
 def erase_object(img, mask):
     """
-    마스크 영역에 해당하는 사물을 인페인팅하여 지웁니다.
+    마스크 영역(0.0~1.0 float32)에 해당하는 사물을 인페인팅하여 지웁니다.
     """
+    # 0.5 임계치 기준으로 이진화
+    binary_mask = (mask > 0.5).astype(np.uint8) * 255
     # 마스크 경계를 살짝 확장하여 잔상이 남지 않고 깔끔하게 지워지도록 처리
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask_dilated = cv2.dilate((mask * 255).astype(np.uint8), kernel, iterations=1)
+    mask_dilated = cv2.dilate(binary_mask, kernel, iterations=1)
     
-    inpainted = cv2.inpaint(img, mask_dilated, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    inpainted = cv2.inpaint(img, mask_dilated, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
     return inpainted
 
 def process_single_image_ai(args):
@@ -109,27 +146,81 @@ def process_single_image_ai(args):
             if len(results) > 0 and results[0].masks is not None:
                 masks = results[0].masks.data.cpu().numpy()
                 boxes = results[0].boxes.xyxy.cpu().numpy()
+                classes = results[0].boxes.cls.cpu().numpy()  # 사물 클래스 ID 가져오기
                 
-                # 화면 크기 대비 적당한 사물 크기 필터링 (가로/세로 20px 이상이고 전체 화면 너비/높이의 35% 이하 크기의 사물만 선택)
+                # 1단계: 사람(클래스 0) 영역에 대한 제외 마스크(human exclusion mask) 구축
+                human_mask = np.zeros((h, w), dtype=np.uint8)
+                has_human = False
+                
+                for i in range(len(masks)):
+                    if int(classes[i]) == 0:  # person
+                        # 세그멘테이션 마스크 리사이즈 및 이진화
+                        p_mask = cv2.resize(masks[i], (w, h), interpolation=cv2.INTER_LINEAR)
+                        p_mask_bin = (p_mask > 0.3).astype(np.uint8) * 255
+                        human_mask = cv2.bitwise_or(human_mask, p_mask_bin)
+                        
+                        # 안전을 위해 바운딩 박스 영역도 강제로 포함시킴 (피부/의상 경계 삐져나옴 완벽 차단)
+                        x1, y1, x2, y2 = boxes[i]
+                        pad_x = int((x2 - x1) * 0.1)
+                        pad_y = int((y2 - y1) * 0.1)
+                        bx1 = max(0, int(x1 - pad_x))
+                        by1 = max(0, int(y1 - pad_y))
+                        bx2 = min(w, int(x2 + pad_x))
+                        by2 = min(h, int(y2 + pad_y))
+                        cv2.rectangle(human_mask, (bx1, by1), (bx2, by2), 255, -1)
+                        has_human = True
+                        
+                # 사람 주변 경계를 확장하여 추가적인 안전 마진 확보 (25x25 팽창 연산)
+                if has_human:
+                    kernel_ex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+                    human_exclusion_mask = cv2.dilate(human_mask, kernel_ex, iterations=1)
+                else:
+                    human_exclusion_mask = None
+                
+                # 2단계: 화면 크기 대비 적당한 사물 크기 필터링 및 사람 영역 배제
                 valid_indices = []
                 for i in range(len(masks)):
+                    # 0번 클래스(person)는 인물 신체/의상 훼손 방지를 위해 제외
+                    if int(classes[i]) == 0:
+                        continue
+                        
                     x1, y1, x2, y2 = boxes[i]
                     box_w = x2 - x1
                     box_h = y2 - y1
                     if 20 <= box_w <= (w * 0.35) and 20 <= box_h <= (h * 0.35):
+                        # 사람 제외 구역과 조금이라도 겹치는지 체크
+                        if human_exclusion_mask is not None:
+                            cand_mask = cv2.resize(masks[i], (w, h), interpolation=cv2.INTER_LINEAR)
+                            cand_mask_bin = (cand_mask > 0.3).astype(np.uint8) * 255
+                            overlap = cv2.bitwise_and(cand_mask_bin, human_exclusion_mask)
+                            if np.sum(overlap > 0) > 0:
+                                # 인물 영역과 겹치거나 근처에 있는 사물은 제외
+                                continue
                         valid_indices.append(i)
                         
                 if valid_indices:
                     chosen_idx = random.choice(valid_indices)
-                    # 마스크 이미지를 원본 이미지 해상도로 리사이즈
-                    obj_mask = cv2.resize(masks[chosen_idx], (w, h), interpolation=cv2.INTER_NEAREST)
+                    
+                    # 마스크 이미지를 원본 이미지 해상도로 리사이즈 (선형 보간 사용)
+                    obj_mask_resized = cv2.resize(masks[chosen_idx], (w, h), interpolation=cv2.INTER_LINEAR)
+                    
+                    # Guided Filter를 이용한 고품질 경계선 정밀화
+                    obj_mask = guided_filter(img, obj_mask_resized, r=5, eps=0.01)
+                    obj_mask = np.clip(obj_mask, 0.0, 1.0)
                     
                     x1, y1, x2, y2 = boxes[chosen_idx]
                     box_w = int(x2 - x1)
                     box_h = int(y2 - y1)
                     
-                    # 50% 확률로 사물 색상 변경 또는 사물 제거(Inpaint) 적용
-                    effect_choice = random.choice([0, 1])
+                    # 뭉개짐(번짐)을 최소화하기 위해 크기가 가로/세로 3% 이하인 아주 작은 사물일 때만 사물 제거(Inpaint) 허용
+                    # 크기가 큰 사물은 텍스처 깨짐 방지를 위해 무조건 100% 선명도가 보존되는 색상 변경(Color Shift)만 적용
+                    is_small = (box_w <= w * 0.03) and (box_h <= h * 0.03)
+                    
+                    if is_small:
+                        effect_choice = random.choice([0, 1])
+                    else:
+                        effect_choice = 0
+                        
                     if effect_choice == 0:
                         changed_img = change_object_color(img, obj_mask)
                         effect_name = f"AI 사물 색상 변경"
