@@ -65,16 +65,20 @@ def guided_filter(I, p, r, eps):
     q = mean_a * I_f + mean_b
     return q
 
-def change_object_color(img, mask):
+def change_object_color(img, mask, is_large=False):
     """
     마스크 영역에 해당하는 사물의 색상을 선명한 대조색으로 변경합니다.
-    mask는 0.0~1.0 사이의 값을 가지는 float32 정밀 마스크입니다 (Guided Filter 결과물).
+    mask는 0.0~1.0 사이의 값을 가지는 float32 정밀 마스크입니다.
     """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
     
-    # 60~120도 구간 회전으로 확실하게 변경
-    hsv_shift = random.choice([random.randint(60, 120), random.randint(-120, -60)])
+    # 너무 큰 오브젝트는 이질감을 줄이기 위해 소프트한 색상 회전(15~35도)을 적용하고,
+    # 적당한 크기 사물은 선명하게 구별되도록 확실하게 변경(60~120도)
+    if is_large:
+        hsv_shift = random.choice([random.randint(15, 35), random.randint(-35, -15)])
+    else:
+        hsv_shift = random.choice([random.randint(60, 120), random.randint(-120, -60)])
     
     # 마스크 영역만 색상 변환
     h_new = h.copy()
@@ -85,16 +89,27 @@ def change_object_color(img, mask):
     mask_indices = mask > 0.1
     h_new[mask_indices] = ((h[mask_indices].astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
     
-    # 채도 및 명암 강제 보정 (선명하게 보이도록 세팅)
-    s_new[mask_indices] = np.clip(s[mask_indices].astype(np.float32) + 120, 150, 255).astype(np.uint8)
+    # 채도 및 명암 강제 보정 (큰 사물은 소프트하게, 작은 사물은 아주 선명하게)
+    if is_large:
+        s_new[mask_indices] = np.clip(s[mask_indices].astype(np.float32) + 40, 0, 255).astype(np.uint8)
+    else:
+        s_new[mask_indices] = np.clip(s[mask_indices].astype(np.float32) + 120, 150, 255).astype(np.uint8)
     
     # 너무 어둡거나 밝은 색 보정
     v_area = v[mask_indices]
     if len(v_area) > 0:
-        if np.mean(v_area) < 70:
-            v_new[mask_indices] = np.clip(v_area.astype(np.float32) + 100, 130, 255).astype(np.uint8)
-        elif np.mean(v_area) > 180:
-            v_new[mask_indices] = np.clip(v_area.astype(np.float32) - 100, 0, 120).astype(np.uint8)
+        mean_v = np.mean(v_area)
+        if is_large:
+            # 큰 사물은 원본 명도를 최대한 보존하면서 약간만 보정
+            if mean_v < 60:
+                v_new[mask_indices] = np.clip(v_area.astype(np.float32) + 40, 0, 255).astype(np.uint8)
+            elif mean_v > 200:
+                v_new[mask_indices] = np.clip(v_area.astype(np.float32) - 40, 0, 255).astype(np.uint8)
+        else:
+            if mean_v < 70:
+                v_new[mask_indices] = np.clip(v_area.astype(np.float32) + 100, 130, 255).astype(np.uint8)
+            elif mean_v > 180:
+                v_new[mask_indices] = np.clip(v_area.astype(np.float32) - 100, 0, 120).astype(np.uint8)
     
     hsv_new = cv2.merge([h_new, s_new, v_new])
     changed_img = cv2.cvtColor(hsv_new, cv2.COLOR_HSV2BGR)
@@ -103,19 +118,6 @@ def change_object_color(img, mask):
     mask_norm = np.expand_dims(mask, axis=2)
     blended = img.astype(np.float32) * (1.0 - mask_norm) + changed_img.astype(np.float32) * mask_norm
     return blended.astype(np.uint8)
-
-def erase_object(img, mask):
-    """
-    마스크 영역(0.0~1.0 float32)에 해당하는 사물을 인페인팅하여 지웁니다.
-    """
-    # 0.5 임계치 기준으로 이진화
-    binary_mask = (mask > 0.5).astype(np.uint8) * 255
-    # 마스크 경계를 살짝 확장하여 잔상이 남지 않고 깔끔하게 지워지도록 처리
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask_dilated = cv2.dilate(binary_mask, kernel, iterations=1)
-    
-    inpainted = cv2.inpaint(img, mask_dilated, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-    return inpainted
 
 def find_suitable_position_safe(img, roi_w, roi_h, exclusion_mask=None):
     """
@@ -239,56 +241,71 @@ def process_single_image_ai(args):
                     kernel_ex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
                     human_exclusion_mask = cv2.dilate(human_mask, kernel_ex, iterations=1)
                 
-                # 2단계: 화면 크기 대비 적당한 사물 크기 필터링 및 사람 영역 배제
-                valid_indices = []
+                # 2. Filter candidates by size, aspect ratio, and human exclusion zone
+                valid_candidates = []
                 for i in range(len(masks)):
-                    # 0번 클래스(person)는 인물 신체/의상 훼손 방지를 위해 제외
-                    if int(classes[i]) == 0:
+                    if int(classes[i]) == 0:  # person
                         continue
                         
                     x1, y1, x2, y2 = boxes[i]
                     box_w = x2 - x1
                     box_h = y2 - y1
-                    # 가로/세로 15px 이상이고 전체 화면 너비/높이의 40% 이하 크기의 사물만 선택
+                    
+                    # Aspect ratio check: avoid long/elongated objects
+                    aspect_ratio = max(box_w / box_h, box_h / box_w)
+                    if aspect_ratio > 2.0:
+                        continue
+                        
+                    # Size check: 15px to 40% of image size
                     if 15 <= box_w <= (w * 0.40) and 15 <= box_h <= (h * 0.40):
-                        # 사람 제외 구역과 조금이라도 겹치는지 체크
                         if human_exclusion_mask is not None:
                             cand_mask = cv2.resize(masks[i], (w, h), interpolation=cv2.INTER_LINEAR)
                             cand_mask_bin = (cand_mask > 0.3).astype(np.uint8) * 255
                             overlap = cv2.bitwise_and(cand_mask_bin, human_exclusion_mask)
                             if np.sum(overlap > 0) > 0:
-                                # 인물 영역과 겹치거나 근처에 있는 사물은 제외
                                 continue
-                        valid_indices.append(i)
+                                
+                        # Calculate suitability score
+                        score_aspect = 1.0 / aspect_ratio
+                        ratio_w = box_w / w
+                        ratio_h = box_h / h
+                        dist_w = abs(ratio_w - 0.12)
+                        dist_h = abs(ratio_h - 0.12)
+                        score_size = 1.0 - (dist_w + dist_h)
                         
-                if valid_indices:
-                    chosen_idx = random.choice(valid_indices)
+                        total_score = score_aspect * 0.6 + score_size * 0.4
+                        
+                        valid_candidates.append({
+                            "idx": i,
+                            "score": total_score,
+                            "box_w": box_w,
+                            "box_h": box_h,
+                            "box": boxes[i]
+                        })
+                        
+                if valid_candidates:
+                    # Sort candidates by score descending
+                    valid_candidates = sorted(valid_candidates, key=lambda c: c["score"], reverse=True)
+                    # Pick randomly from the top 3 candidates
+                    chosen_candidate = random.choice(valid_candidates[:3])
+                    chosen_idx = chosen_candidate["idx"]
+                    box_w = int(chosen_candidate["box_w"])
+                    box_h = int(chosen_candidate["box_h"])
+                    x1, y1, x2, y2 = chosen_candidate["box"]
                     
-                    # 마스크 이미지를 원본 이미지 해상도로 리사이즈 (선형 보간 사용)
+                    # Resize mask to full resolution
                     obj_mask_resized = cv2.resize(masks[chosen_idx], (w, h), interpolation=cv2.INTER_LINEAR)
                     
-                    # Guided Filter를 이용한 고품질 경계선 정밀화
+                    # Refine mask using Guided Filter
                     obj_mask = guided_filter(img, obj_mask_resized, r=5, eps=0.01)
                     obj_mask = np.clip(obj_mask, 0.0, 1.0)
                     
-                    x1, y1, x2, y2 = boxes[chosen_idx]
-                    box_w = int(x2 - x1)
-                    box_h = int(y2 - y1)
+                    # Determine if the object is large (area >= 6% of image area)
+                    is_large = (box_w * box_h) >= (w * h * 0.06)
                     
-                    # 뭉개짐(번짐)을 최소화하기 위해 크기가 가로/세로 8% 이하인 사물일 때 사물 제거(Inpaint) 허용 (Guided Filter 적용으로 화질 개선)
-                    is_small = (box_w <= w * 0.08) and (box_h <= h * 0.08)
-                    
-                    if is_small:
-                        effect_choice = random.choice([0, 1])
-                    else:
-                        effect_choice = 0
-                        
-                    if effect_choice == 0:
-                        changed_img = change_object_color(img, obj_mask)
-                        effect_name = f"AI 사물 색상 변경"
-                    else:
-                        changed_img = erase_object(img, obj_mask)
-                        effect_name = f"AI 사물 제거"
+                    # Apply color shift (no inpainting/erasure)
+                    changed_img = change_object_color(img, obj_mask, is_large=is_large)
+                    effect_name = "AI 사물 색상 변경"
                         
                     coords = {
                         "x": int(x1),
@@ -299,36 +316,27 @@ def process_single_image_ai(args):
         except Exception as e:
             print(f"AI 분석 중 오류 발생, 스티커 백업 모드로 전환: {e}")
             
-    # AI로 사물 감지에 실패했거나 모델이 없을 때 -> 기존의 전통 CV 방식으로 백업 처리
+    # Fallback to traditional CV when no AI object is detected
     if coords is None:
-        # Stickers 폴더 내 스티커 추가 효과 임포트 및 전통 방식 유틸 임포트
         from generate_difference import (
             apply_sticker_addition_effect,
             apply_random_effect,
             get_object_mask,
-            blend_with_object_mask,
-            apply_inpainting_effect
+            blend_with_object_mask
         )
         
-        # 화면에 맞게 일정하게 화면 기준 정형화된 사이즈로 조절 (4% ~ 5%, 최소 12px)
         sticker_size = max(12, int(w * random.uniform(0.04, 0.05)))
         roi_w = sticker_size
         roi_h = sticker_size
         
-        # 사람 영역을 우회하는 안전한 영역 선정
         x, y = find_suitable_position_safe(img, roi_w, roi_h, human_exclusion_mask)
         
-        # 백업 모드에서도 다양성을 위해 스티커 추가, 사물 제거(인페인트), 사물 변형(색상/카툰) 중 랜덤 선택
-        effect_choice = random.choice([0, 1, 2])
+        # Fallback choices: 0: sticker, 2: color shift/cartoonify (no inpainting)
+        effect_choice = random.choice([0, 2])
         
         if effect_choice == 0:
             changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h, alpha=1.0)
             effect_name = "스티커 추가 (백업)"
-        elif effect_choice == 1:
-            roi = img[y:y+roi_h, x:x+roi_w]
-            local_mask = get_object_mask(roi)
-            changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, local_mask)
-            effect_name = "사물 제거 (백업)"
         else:
             roi = img[y:y+roi_h, x:x+roi_w]
             local_mask = get_object_mask(roi)
