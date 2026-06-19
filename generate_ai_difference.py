@@ -110,13 +110,13 @@ def process_single_image_ai(args):
                 masks = results[0].masks.data.cpu().numpy()
                 boxes = results[0].boxes.xyxy.cpu().numpy()
                 
-                # 화면 크기 대비 적당한 사물 크기 필터링 (가로/세로 35px 이상이고 전체 화면 너비/높이의 15% 이하 크기의 사물만 선택)
+                # 화면 크기 대비 적당한 사물 크기 필터링 (가로/세로 20px 이상이고 전체 화면 너비/높이의 35% 이하 크기의 사물만 선택)
                 valid_indices = []
                 for i in range(len(masks)):
                     x1, y1, x2, y2 = boxes[i]
                     box_w = x2 - x1
                     box_h = y2 - y1
-                    if 35 <= box_w <= (w * 0.15) and 35 <= box_h <= (h * 0.15):
+                    if 20 <= box_w <= (w * 0.35) and 20 <= box_h <= (h * 0.35):
                         valid_indices.append(i)
                         
                 if valid_indices:
