@@ -1,7 +1,7 @@
 import os
 import json
 from flask import Flask, request, jsonify, send_from_directory
-from generate_difference import process_single_image
+from generate_ai_difference import process_single_image_ai
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
@@ -10,6 +10,16 @@ ORIGINAL_DIR = os.path.join(BASE_DIR, "Images", "Original")
 CHANGED_DIR = os.path.join(BASE_DIR, "Images", "Changed")
 COORDS_PATH = os.path.join(BASE_DIR, "Images", "diff_coords.json")
 JS_COORDS_PATH = os.path.join(BASE_DIR, "Images", "diff_coords.js")
+
+# YOLOv8-seg AI 모델 전역 로드 시도
+YOLO_MODEL = None
+try:
+    from ultralytics import YOLO
+    model_path = os.path.join(BASE_DIR, "yolov8n-seg.pt")
+    YOLO_MODEL = YOLO(model_path)
+    print("Flask Server: YOLOv8-seg AI model loaded successfully.")
+except Exception as e:
+    print(f"Flask Server: AI model loading skipped (using sticker backup mode): {e}")
 
 @app.route('/')
 def index():
@@ -40,12 +50,12 @@ def regenerate_image():
     # 윈도우 OS 경로 형태로 호환되게 변환
     rel_path = rel_path_norm.replace('/', os.sep)
     
-    # process_single_image 호출 파라미터 구성
-    # args: (rel_path, rel_path_norm, original_dir, changed_dir, force, existing_coords)
-    args = (rel_path, rel_path_norm, ORIGINAL_DIR, CHANGED_DIR, True, None)
+    # process_single_image_ai 호출 파라미터 구성
+    # args: (rel_path, rel_path_norm, original_dir, changed_dir, force, existing_coords, model)
+    args = (rel_path, rel_path_norm, ORIGINAL_DIR, CHANGED_DIR, True, None, YOLO_MODEL)
     
     try:
-        result = process_single_image(args)
+        result = process_single_image_ai(args)
         if result is None:
             return jsonify({"success": False, "error": "Image generation failed"}), 500
         
@@ -103,8 +113,8 @@ def upload_files():
             file.save(target_path)
             
         # After saving, run the image difference generator
-        import generate_difference
-        generate_difference.main()
+        import generate_ai_difference
+        generate_ai_difference.main()
         
         return jsonify({"success": True, "count": len(uploaded_files)})
     except Exception as e:
