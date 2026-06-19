@@ -117,6 +117,77 @@ def erase_object(img, mask):
     inpainted = cv2.inpaint(img, mask_dilated, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
     return inpainted
 
+def find_suitable_position_safe(img, roi_w, roi_h, exclusion_mask=None):
+    """
+    이미지 내부에서 에지 밀도와 중심 에지 포함률을 분석하여,
+    단색 무늬 배경을 피하고 사물의 경계선(Border) 위에 스티커/변형이 적용되도록 위치를 선정합니다.
+    인물 제외 마스크(exclusion_mask)가 제공되면 해당 영역을 철저히 피합니다.
+    """
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+    
+    margin_x = int(w * 0.1)
+    margin_y = int(h * 0.1)
+    
+    candidates = []
+    # 150번 무작위 시도하여 인물 영역을 완벽하게 필터링하고 최적 위치 검색
+    for _ in range(150):
+        x = random.randint(margin_x, w - roi_w - margin_x)
+        y = random.randint(margin_y, h - roi_h - margin_y)
+        
+        # 인물 보호 구역과 겹치는지 검사
+        if exclusion_mask is not None:
+            roi_ex = exclusion_mask[y:y+roi_h, x:x+roi_w]
+            if np.sum(roi_ex > 0) > 0:
+                continue
+                
+        roi_edges = edges[y:y+roi_h, x:x+roi_w]
+        edge_count = np.sum(roi_edges > 0)
+        
+        cx1, cx2 = roi_w // 4, 3 * roi_w // 4
+        cy1, cy2 = roi_h // 4, 3 * roi_h // 4
+        center_edges = np.sum(roi_edges[cy1:cy2, cx1:cx2] > 0)
+        
+        candidates.append((x, y, edge_count, center_edges))
+        
+    if not candidates:
+        # 혹시나 인물 제외 구역 때문에 겹치지 않는 구역을 찾지 못했다면 전체 화면에서 인물이 없는 빈 공간 강제 탐색
+        for _ in range(100):
+            x = random.randint(0, w - roi_w)
+            y = random.randint(0, h - roi_h)
+            if exclusion_mask is not None:
+                roi_ex = exclusion_mask[y:y+roi_h, x:x+roi_w]
+                if np.sum(roi_ex > 0) > 0:
+                    continue
+            return x, y
+        # 최악의 경우 (이미지 전체가 인물인 경우 등) 그냥 기본값 반환
+        return random.randint(0, w - roi_w), random.randint(0, h - roi_h)
+        
+    roi_area = roi_w * roi_h
+    center_area = (roi_w // 2) * (roi_h // 2)
+    
+    suitable_candidates = []
+    for x, y, count, center_count in candidates:
+        density = count / roi_area
+        center_density = center_count / center_area
+        if 0.08 <= density <= 0.45 and center_density >= 0.05:
+            suitable_candidates.append((x, y))
+            
+    if suitable_candidates:
+        return random.choice(suitable_candidates)
+        
+    fallback_candidates = [
+        (x, y) for x, y, count, _ in candidates
+        if 0.08 <= (count / roi_area) <= 0.45
+    ]
+    if fallback_candidates:
+        return random.choice(fallback_candidates)
+        
+    candidates_sorted = sorted(candidates, key=lambda item: item[3], reverse=True)
+    return candidates_sorted[0][0], candidates_sorted[0][1]
+
 def process_single_image_ai(args):
     """
     AI 모델 또는 스티커 백업을 사용하여 단일 이미지를 처리합니다.
@@ -139,6 +210,9 @@ def process_single_image_ai(args):
     effect_name = ""
     coords = None
     
+    # 인물 제외 구역을 저장할 마스크 초기화 (백업 모드에서도 활용하기 위해 밖으로 인출)
+    human_exclusion_mask = None
+    
     # AI 모델을 사용한 객체 감지 및 세그멘테이션 시도
     if model is not None:
         try:
@@ -158,24 +232,12 @@ def process_single_image_ai(args):
                         p_mask = cv2.resize(masks[i], (w, h), interpolation=cv2.INTER_LINEAR)
                         p_mask_bin = (p_mask > 0.3).astype(np.uint8) * 255
                         human_mask = cv2.bitwise_or(human_mask, p_mask_bin)
-                        
-                        # 안전을 위해 바운딩 박스 영역도 강제로 포함시킴 (피부/의상 경계 삐져나옴 완벽 차단)
-                        x1, y1, x2, y2 = boxes[i]
-                        pad_x = int((x2 - x1) * 0.1)
-                        pad_y = int((y2 - y1) * 0.1)
-                        bx1 = max(0, int(x1 - pad_x))
-                        by1 = max(0, int(y1 - pad_y))
-                        bx2 = min(w, int(x2 + pad_x))
-                        by2 = min(h, int(y2 + pad_y))
-                        cv2.rectangle(human_mask, (bx1, by1), (bx2, by2), 255, -1)
                         has_human = True
                         
-                # 사람 주변 경계를 확장하여 추가적인 안전 마진 확보 (25x25 팽창 연산)
+                # 사람 주변 경계를 확장하여 추가적인 안전 마진 확보 (15x15 팽창 연산)
                 if has_human:
-                    kernel_ex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+                    kernel_ex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
                     human_exclusion_mask = cv2.dilate(human_mask, kernel_ex, iterations=1)
-                else:
-                    human_exclusion_mask = None
                 
                 # 2단계: 화면 크기 대비 적당한 사물 크기 필터링 및 사람 영역 배제
                 valid_indices = []
@@ -187,7 +249,8 @@ def process_single_image_ai(args):
                     x1, y1, x2, y2 = boxes[i]
                     box_w = x2 - x1
                     box_h = y2 - y1
-                    if 20 <= box_w <= (w * 0.35) and 20 <= box_h <= (h * 0.35):
+                    # 가로/세로 15px 이상이고 전체 화면 너비/높이의 40% 이하 크기의 사물만 선택
+                    if 15 <= box_w <= (w * 0.40) and 15 <= box_h <= (h * 0.40):
                         # 사람 제외 구역과 조금이라도 겹치는지 체크
                         if human_exclusion_mask is not None:
                             cand_mask = cv2.resize(masks[i], (w, h), interpolation=cv2.INTER_LINEAR)
@@ -212,9 +275,8 @@ def process_single_image_ai(args):
                     box_w = int(x2 - x1)
                     box_h = int(y2 - y1)
                     
-                    # 뭉개짐(번짐)을 최소화하기 위해 크기가 가로/세로 3% 이하인 아주 작은 사물일 때만 사물 제거(Inpaint) 허용
-                    # 크기가 큰 사물은 텍스처 깨짐 방지를 위해 무조건 100% 선명도가 보존되는 색상 변경(Color Shift)만 적용
-                    is_small = (box_w <= w * 0.03) and (box_h <= h * 0.03)
+                    # 뭉개짐(번짐)을 최소화하기 위해 크기가 가로/세로 8% 이하인 사물일 때 사물 제거(Inpaint) 허용 (Guided Filter 적용으로 화질 개선)
+                    is_small = (box_w <= w * 0.08) and (box_h <= h * 0.08)
                     
                     if is_small:
                         effect_choice = random.choice([0, 1])
@@ -237,19 +299,45 @@ def process_single_image_ai(args):
         except Exception as e:
             print(f"AI 분석 중 오류 발생, 스티커 백업 모드로 전환: {e}")
             
-    # AI로 사물 감지에 실패했거나 모델이 없을 때 -> 기존의 스티커 방식으로 백업 처리
+    # AI로 사물 감지에 실패했거나 모델이 없을 때 -> 기존의 전통 CV 방식으로 백업 처리
     if coords is None:
-        # Stickers 폴더 내 스티커 추가 효과 임포트
-        from generate_difference import find_suitable_position, apply_sticker_addition_effect
+        # Stickers 폴더 내 스티커 추가 효과 임포트 및 전통 방식 유틸 임포트
+        from generate_difference import (
+            apply_sticker_addition_effect,
+            apply_random_effect,
+            get_object_mask,
+            blend_with_object_mask,
+            apply_inpainting_effect
+        )
         
         # 화면에 맞게 일정하게 화면 기준 정형화된 사이즈로 조절 (4% ~ 5%, 최소 12px)
         sticker_size = max(12, int(w * random.uniform(0.04, 0.05)))
         roi_w = sticker_size
         roi_h = sticker_size
         
-        x, y = find_suitable_position(img, roi_w, roi_h)
-        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h, alpha=1.0)
-        effect_name = "스티커 추가 (백업)"
+        # 사람 영역을 우회하는 안전한 영역 선정
+        x, y = find_suitable_position_safe(img, roi_w, roi_h, human_exclusion_mask)
+        
+        # 백업 모드에서도 다양성을 위해 스티커 추가, 사물 제거(인페인트), 사물 변형(색상/카툰) 중 랜덤 선택
+        effect_choice = random.choice([0, 1, 2])
+        
+        if effect_choice == 0:
+            changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h, alpha=1.0)
+            effect_name = "스티커 추가 (백업)"
+        elif effect_choice == 1:
+            roi = img[y:y+roi_h, x:x+roi_w]
+            local_mask = get_object_mask(roi)
+            changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, local_mask)
+            effect_name = "사물 제거 (백업)"
+        else:
+            roi = img[y:y+roi_h, x:x+roi_w]
+            local_mask = get_object_mask(roi)
+            effect_roi = apply_random_effect(roi)
+            blended_roi = blend_with_object_mask(roi, effect_roi, local_mask, alpha=1.0)
+            changed_img = img.copy()
+            changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
+            effect_name = "사물 변형 (백업)"
+            
         coords = {
             "x": x,
             "y": y,
