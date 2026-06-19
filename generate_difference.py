@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import json
 import random
+import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,8 +51,8 @@ def apply_random_effect(roi):
     h, s, v = cv2.split(hsv_orig)
     s_mean = np.mean(s)
     
-    # 60~140도 구간 회전으로 원본과 뚜렷하게 대비되는 색상을 획득
-    hsv_shift = random.choice([random.randint(60, 90), random.randint(110, 140)])
+    # 60~120도 구간 회전으로 원본과 확연히 대비되는 색상을 획득
+    hsv_shift = random.choice([random.randint(60, 120), random.randint(-120, -60)])
     
     if effect_type == "cartoon":
         # 1. 고품질 만화화 필터
@@ -62,17 +63,23 @@ def apply_random_effect(roi):
         color_hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
         ch, cs, cv = cv2.split(color_hsv)
         
-        # 피부색/살색 등 저채도 영역 감지 시 채도 강제 펌핑
-        if s_mean < 50:
-            cs = np.clip(cs.astype(np.float32) * 2.5 + 50, 65, 255).astype(np.uint8)
-            cv = np.clip(cv.astype(np.float32) * 1.1 + 10, 0, 255).astype(np.uint8)
+        # 무채색/저채도 및 지나치게 어둡거나 밝은 영역(머리카락, 흰 배경 등) 감지 시 강력한 색조/밝기 주입
+        if s_mean < 60:
+            # 채도를 대폭 끌어올려 컬러를 강제로 도드라지게 함 (최소 150)
+            cs = np.clip(cs.astype(np.float32) + 120, 150, 255).astype(np.uint8)
+        if np.mean(cv) < 70:
+            # 너무 어두운 경우 밝기를 매우 밝게 올림 (최소 130)
+            cv = np.clip(cv.astype(np.float32) + 100, 130, 255).astype(np.uint8)
+        elif np.mean(cv) > 180:
+            # 너무 밝은 경우 어둡게 낮춤 (최대 120)
+            cv = np.clip(cv.astype(np.float32) - 100, 0, 120).astype(np.uint8)
         
-        # 카툰화에서도 색상이 쉽게 구분되도록 50% 확률로 색상 회전 추가
-        if random.random() < 0.5:
+        # 카툰화에서도 색상이 쉽게 구분되도록 80% 확률로 색상 회전 추가
+        if random.random() < 0.8:
             ch = ((ch.astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
             
-        # 기본 카툰 채도 향상
-        cs = np.clip(cs * 1.35, 0, 255).astype(np.uint8)
+        # 기본 카툰 채도 대폭 향상
+        cs = np.clip(cs * 1.5, 0, 255).astype(np.uint8)
         
         color_merged = cv2.merge([ch, cs, cv])
         color = cv2.cvtColor(color_merged, cv2.COLOR_HSV2BGR)
@@ -95,15 +102,20 @@ def apply_random_effect(roi):
         
     else:
         # 2. 사물 색상 변경 (Hue Shift) - 원본 형상 대비 선명한 대조색 부여
-        # 피부색/살색 등 저채도 영역 감지 시 채도 강제 펌핑
-        if s_mean < 50:
-            s = np.clip(s.astype(np.float32) * 2.5 + 50, 65, 255).astype(np.uint8)
-            v = np.clip(v.astype(np.float32) * 1.1 + 10, 0, 255).astype(np.uint8)
+        if s_mean < 60:
+            # 채도를 대폭 끌어올려 컬러를 강제로 도드라지게 함 (최소 150)
+            s = np.clip(s.astype(np.float32) + 120, 150, 255).astype(np.uint8)
+        if np.mean(v) < 70:
+            # 너무 어두운 경우 밝기를 매우 밝게 올림 (최소 130)
+            v = np.clip(v.astype(np.float32) + 100, 130, 255).astype(np.uint8)
+        elif np.mean(v) > 180:
+            # 너무 밝은 경우 어둡게 낮춤 (최대 120)
+            v = np.clip(v.astype(np.float32) - 100, 0, 120).astype(np.uint8)
             
         # 확실한 보색 및 대조 구분을 위해 강제 색조 회전
         h = ((h.astype(np.int16) + hsv_shift) % 180).astype(np.uint8)
-        # 기본 채도 추가 부스트
-        s = np.clip(s * 1.4, 0, 255).astype(np.uint8)
+        # 기본 채도 및 밝기 추가 조정
+        s = np.clip(s * 1.5, 0, 255).astype(np.uint8)
         v = np.clip(v * 1.1 + 10, 0, 255).astype(np.uint8)
         
         merged = cv2.merge([h, s, v])
@@ -130,12 +142,12 @@ def get_object_mask(roi):
         # 면적이 넓은 순서대로 외곽선 정렬
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
         
-        # 전체 ROI 영역의 2% ~ 80% 크기에 달하는 윤곽선 중 가장 큰 실루엣을 타겟팅
+        # 전체 ROI 영역의 5% ~ 95% 크기에 달하는 윤곽선 중 가장 큰 실루엣을 타겟팅하여 검출 범위 확대
         roi_area = h * w
         chosen_contour = None
         for c in contours:
             area = cv2.contourArea(c)
-            if 0.02 * roi_area < area < 0.8 * roi_area:
+            if 0.05 * roi_area < area < 0.95 * roi_area:
                 chosen_contour = c
                 break
         
@@ -144,25 +156,22 @@ def get_object_mask(roi):
             cv2.drawContours(mask, [chosen_contour], -1, 255, -1)
             return mask
 
-    # 적절한 사물 형태를 검출하지 못했다면 부드러운 중앙 원형(Oval) 마스크로 대체 (네모 경계 방지)
-    cv2.circle(mask, (w // 2, h // 2), int(min(w, h) * 0.35), 255, -1)
+    # 적절한 사물 형태를 검출하지 못했다면 부드러운 중앙 원형(Oval) 마스크로 대체 (선명함을 높이기 위해 반지름 비율을 0.45로 확대)
+    cv2.circle(mask, (w // 2, h // 2), int(min(w, h) * 0.45), 255, -1)
     return mask
 
-def blend_with_object_mask(original_roi, changed_roi, mask):
+def blend_with_object_mask(original_roi, changed_roi, mask, alpha=1.0):
     """
-    사물 이진 마스크에 가우시안 블러링을 주어 원본과 변형 ROI를 부드럽게 합성합니다.
+    사물 이진 마스크에 가우시안 블러링을 주어 원본과 변형 ROI를 합성합니다.
     """
     h, w, c = original_roi.shape
     
-    # 사물 가장자리를 아웃포커싱하듯 뿌옇게 블러하여 자연스러운 오버랩 마스크 형성
-    kernel_size = int(min(h, w) * 0.15)
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    kernel_size = max(3, kernel_size)
+    # 경계가 너무 뿌옇게 퍼져서 투명해지는 현상을 막기 위해 블러 필터 크기를 최소화하여 선명도 상승
+    kernel_size = 3
     
     mask_blur = cv2.GaussianBlur(mask, (kernel_size, kernel_size), 0)
     mask_normalized = mask_blur.astype(np.float32) / 255.0
-    mask_normalized = np.expand_dims(mask_normalized, axis=2) # (H, W, 1)로 변환
+    mask_normalized = np.expand_dims(mask_normalized, axis=2) * alpha # (H, W, 1)로 변환 및 투명도 반영
     
     # 합성: O * (1 - M) + C * M
     blended = (original_roi.astype(np.float32) * (1.0 - mask_normalized) + 
@@ -216,10 +225,10 @@ def warp_sticker_perspective(sticker, mask):
     
     return warped_sticker, warped_mask
 
-def blend_sticker_realistically(target_roi, sticker, mask):
+def blend_sticker_realistically(target_roi, sticker, mask, alpha=1.0):
     """
     마스크 영역에 그림자(Drop Shadow)를 주입하고, 
-    원본 이미지의 명암/질감을 투과(Multiply)시켜 3D 표면에 자연스럽게 인쇄된 효과를 냅니다.
+    원본 이미지의 명암/질감을 약하게 투과시켜 선명하고 선명한 스티커 효과를 냅니다.
     """
     h, w = target_roi.shape[:2]
     
@@ -238,28 +247,22 @@ def blend_sticker_realistically(target_roi, sticker, mask):
     # 2. 원본 ROI에 그림자 합성 (원래 배경을 어둡게 만듦)
     roi_shadowed = (target_roi.astype(np.float32) * (1.0 - shadow_normalized)).astype(np.uint8)
     
-    # 3. 텍스처 블렌딩 (Multiply 기법 적용)
-    # 배경의 회색조(밝기) 맵 추출
-    gray_bg = cv2.cvtColor(roi_shadowed, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    gray_bg = np.expand_dims(gray_bg, axis=2)
-    
-    # 조명 효과: 0.65 + 0.35 * bg_brightness 형태로 텍스처를 자연스럽게 결합
-    blend_factor = 0.65 + 0.35 * gray_bg
-    textured_sticker = (sticker.astype(np.float32) * blend_factor).astype(np.uint8)
+    # 3. 색상 블렌딩 투과 없이 스티커 원래 색상 그대로 사용
+    textured_sticker = sticker.copy()
     
     # 4. 마스크 기반 최종 합성 (가우시안 블러링으로 경계 스무싱)
     mask_blur = cv2.GaussianBlur(mask, (3, 3), 0)
     mask_normalized = mask_blur.astype(np.float32) / 255.0
-    mask_normalized = np.expand_dims(mask_normalized, axis=2)
+    mask_normalized = np.expand_dims(mask_normalized, axis=2) * alpha
     
     final_roi = (roi_shadowed.astype(np.float32) * (1.0 - mask_normalized) + 
                  textured_sticker.astype(np.float32) * mask_normalized)
                  
     return final_roi.astype(np.uint8)
 
-def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
+def apply_sticker_addition_effect(img, x, y, roi_w, roi_h, alpha=1.0):
     """
-    Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 3D 원근 왜곡 및 그림자/텍스처 블렌딩으로 합성합니다.
+    Stickers 폴더 내의 만화 스티커 중 하나를 로드하여 원본 이미지의 (x, y) 위치에 3D 원근 왜곡 및 그림자/텍스처/반투명 블렌딩으로 합성합니다.
     """
     stickers_dir = os.path.join(BASE_DIR, "Images", "Stickers")
     if not os.path.exists(stickers_dir):
@@ -292,7 +295,7 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
     
     # 4. 합성 영역 추출 및 그림자/명암(Multiply) 블렌딩 적용
     target_roi = img[y:y+roi_h, x:x+roi_w]
-    blended = blend_sticker_realistically(target_roi, warped_sticker, warped_mask)
+    blended = blend_sticker_realistically(target_roi, warped_sticker, warped_mask, alpha)
     
     changed_img = img.copy()
     changed_img[y:y+roi_h, x:x+roi_w] = blended
@@ -301,8 +304,8 @@ def apply_sticker_addition_effect(img, x, y, roi_w, roi_h):
 
 def find_suitable_position(img, roi_w, roi_h):
     """
-    이미지 내부에서 에지 밀도를 분석하여 만화 스티커가 얹히기에 
-    너무 단조롭지(예: 휑한 하늘, 민무늬 벽)도 않고 너무 조잡하지도 않은 적절한 영역을 골라 반환합니다.
+    이미지 내부에서 에지 밀도와 중심 에지 포함률을 분석하여, 
+    단색 무늬 배경을 피하고 사물의 경계선(Border)이나 디테일이 풍부한 지역 위에 스티커가 붙도록 위치를 선정합니다.
     """
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -312,28 +315,48 @@ def find_suitable_position(img, roi_w, roi_h):
     margin_x = int(w * 0.1)
     margin_y = int(h * 0.1)
     
-    # 25개의 무작위 후보 영역을 추출하여 에지 픽셀 밀도(디테일 정도) 분석
+    # 100개의 무작위 후보 영역을 추출하여 에지 픽셀 밀도(디테일/경계 정도)를 세밀하게 분석
     candidates = []
-    for _ in range(25):
+    for _ in range(100):
         x = random.randint(margin_x, w - roi_w - margin_x)
         y = random.randint(margin_y, h - roi_h - margin_y)
         
         roi_edges = edges[y:y+roi_h, x:x+roi_w]
         edge_count = np.sum(roi_edges > 0)
-        candidates.append((x, y, edge_count))
         
-    # 너무 민무늬(벽, 하늘)인 곳을 피하기 위해 적당히 에지가 존재하는 후보군 추출
+        # ROI 중심 영역(가운데 50% 면적)에 에지가 포함되는지 분석 (경계선 부근에 부착 유도)
+        cx1, cx2 = roi_w // 4, 3 * roi_w // 4
+        cy1, cy2 = roi_h // 4, 3 * roi_h // 4
+        center_edges = np.sum(roi_edges[cy1:cy2, cx1:cx2] > 0)
+        
+        candidates.append((x, y, edge_count, center_edges))
+        
     roi_area = roi_w * roi_h
-    suitable_candidates = [
-        (cx, cy) for cx, cy, count in candidates 
-        if 0.01 * roi_area <= count <= 0.18 * roi_area
-    ]
+    center_area = (roi_w // 2) * (roi_h // 2)
     
+    # 적절한 후보 기준 필터링:
+    # 1. 민무늬(단조로운 배경)를 완벽히 피하기 위해 에지 밀도가 최소 8% 이상
+    # 2. 물체의 경계선(에지)이 ROI 중심 영역에 확실히 걸쳐 있어 자연스럽게 경계에 매달리도록 유도 (최소 5% 이상)
+    suitable_candidates = []
+    for x, y, count, center_count in candidates:
+        density = count / roi_area
+        center_density = center_count / center_area
+        if 0.08 <= density <= 0.45 and center_density >= 0.05:
+            suitable_candidates.append((x, y))
+            
     if suitable_candidates:
         return random.choice(suitable_candidates)
         
-    # 적합한 후보가 없다면 에지가 가장 많은 후보 지점을 반환
-    candidates_sorted = sorted(candidates, key=lambda item: item[2], reverse=True)
+    # 적합한 후보군이 없다면 에지 밀도 기준 8%~45% 사이인 후보군 중 랜덤 선택
+    fallback_candidates = [
+        (x, y) for x, y, count, _ in candidates
+        if 0.08 <= (count / roi_area) <= 0.45
+    ]
+    if fallback_candidates:
+        return random.choice(fallback_candidates)
+        
+    # 그것도 없다면 전체 후보 중 중심 에지 밀도가 가장 높은 후보를 반환하여 단조로운 영역을 완전히 피함
+    candidates_sorted = sorted(candidates, key=lambda item: item[3], reverse=True)
     return candidates_sorted[0][0], candidates_sorted[0][1]
 
 def process_single_image(args):
@@ -361,18 +384,16 @@ def process_single_image(args):
         
     h, w, c = img.shape
     
-    # 변형 영역의 임의 크기 설정 (전체 크기의 2.5% ~ 5.5% 가량으로 세밀하게 축소)
-    roi_w = max(25, int(w * random.uniform(0.025, 0.055)))
-    roi_h = max(25, int(h * random.uniform(0.025, 0.055)))
+    # 실제 화면에 보이는 크기가 고르게 일정하도록 이미지 가로 해상도의 4.0% ~ 5.0% 수준으로 조절 (스티커 왜곡 방지를 위해 정사각 형태 적용, 최소 12px)
+    sticker_size = max(12, int(w * random.uniform(0.04, 0.05)))
+    roi_w = sticker_size
+    roi_h = sticker_size
     
     # 에지 밀도 맵 분석을 통해 최적의 위치(x, y) 탐색
     x, y = find_suitable_position(img, roi_w, roi_h)
     
-    # 다양한 변형 효과를 랜덤 적용하여 위장 능력 및 난이도 향상
-    # 0: 사물 변형 (Hue Shift / Cartoon) - 60% 확률
-    # 1: 사물 제거 (Inpainting) - 20% 확률
-    # 2: 사물 추가 (Cartoon Sticker) - 20% 확률
-    effect_choice = random.choice([0, 0, 0, 1, 2])
+    # 원래대로 이미지 부착형(Cartoon Sticker) 효과만 사용
+    effect_choice = 2
     
     if effect_choice == 0:
         # 원본 ROI 추출 및 마스크 획득
@@ -380,8 +401,9 @@ def process_single_image(args):
         mask = get_object_mask(roi)
         # 만화화 또는 색상 변형 효과 적용
         effect_roi = apply_random_effect(roi)
-        # 자연스럽게 합성
-        blended_roi = blend_with_object_mask(roi, effect_roi, mask)
+        # 100% 완전 불투명 합성하여 시인성 극대화
+        alpha = 1.0
+        blended_roi = blend_with_object_mask(roi, effect_roi, mask, alpha=alpha)
         
         changed_img = img.copy()
         changed_img[y:y+roi_h, x:x+roi_w] = blended_roi
@@ -391,13 +413,14 @@ def process_single_image(args):
         # 원본 ROI 추출 및 마스크 획득
         roi = img[y:y+roi_h, x:x+roi_w]
         mask = get_object_mask(roi)
-        # 사물 제거 (Inpainting) 효과 적용
+        # 사물 제거 (Inpainting) 효과 적용 - 무조건 100% 완전 제거하여 시인성 보장
         changed_img = apply_inpainting_effect(img, x, y, roi_w, roi_h, mask)
         effect_name = "사물 제거 (Inpaint)"
         
     else:
-        # 사물 추가 (Cartoon Sticker) 효과 적용
-        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h)
+        # 스티커가 100% 완전 진하게 보이도록 알파값 1.0 설정
+        alpha = 1.0
+        changed_img = apply_sticker_addition_effect(img, x, y, roi_w, roi_h, alpha=alpha)
         effect_name = "사물 추가 (Cartoon Sticker)"
         
     # 유니코드 지원 함수를 사용해 이미지를 저장합니다.
@@ -416,6 +439,9 @@ def process_single_image(args):
     return rel_path_norm, coords
 
 def main():
+    import sys
+    force_all = "--force" in sys.argv
+    
     original_dir = os.path.join(BASE_DIR, "Images", "Original")
     changed_dir = os.path.join(BASE_DIR, "Images", "Changed")
     os.makedirs(changed_dir, exist_ok=True)
@@ -453,9 +479,9 @@ def main():
     tasks = []
     for rel_path, rel_path_norm in all_images_rel:
         existing = diff_coords.get(rel_path_norm)
-        tasks.append((rel_path, rel_path_norm, original_dir, changed_dir, False, existing))
+        tasks.append((rel_path, rel_path_norm, original_dir, changed_dir, force_all, existing))
         
-    print(f"총 {len(tasks)}개의 이미지 처리 시작 (병렬 처리)...")
+    print(f"총 {len(tasks)}개의 이미지 처리 시작 (병렬 처리, force={force_all})...")
     
     new_diff_coords = {}
     processed_count = 0

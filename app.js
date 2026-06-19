@@ -249,8 +249,8 @@ document.addEventListener('DOMContentLoaded', () => {
             checkAllLoaded();
         };
 
-        // 이미지 소스 매칭 (캐시 방지를 위한 타임스탬프 쿼리 스트링 조건부 추가)
-        const cacheBust = useCacheBusting ? `?t=${Date.now()}` : '';
+        // 이미지 소스 매칭 (브라우저 캐싱 방지를 위해 항상 타임스탬프 쿼리 스트링 추가)
+        const cacheBust = `?t=${Date.now()}`;
         imgOriginal.src = `Images/Original/${stage.path}${cacheBust}`;
         imgChanged.src = `Images/Changed/${stage.path}${cacheBust}`;
     }
@@ -471,6 +471,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         overlayOriginal.appendChild(ringOriginal);
         overlayChanged.appendChild(ringChanged);
+
+        // 힌트 영역이 화면 밖에 있다면 해당 위치로 부드럽게 스크롤
+        ringOriginal.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
         // 1.5초 후 힌트 링을 페이드아웃하며 삭제
         setTimeout(() => {

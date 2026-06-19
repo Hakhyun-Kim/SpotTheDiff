@@ -10,7 +10,7 @@ if exist "Images\Changed" (
 )
 echo.
 echo 2. Running python generate_difference.py...
-python generate_difference.py
+python generate_difference.py --force
 echo.
 echo ===================================================
 echo  Regeneration completed successfully!
